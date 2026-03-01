@@ -48,7 +48,7 @@
   <div class="modal glass-strong">
     <div class="modal-header">
       <h2>Settings</h2>
-      <button class="btn-icon" onclick={onClose}>
+      <button class="btn-icon" aria-label="Close" onclick={onClose}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>

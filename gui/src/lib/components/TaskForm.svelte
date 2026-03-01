@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { api, type TaskDto, type TaskRequest, taskId } from '$lib/api/client';
   import { loadTasks } from '$lib/stores/tasks';
 
@@ -9,19 +10,22 @@
 
   const isEdit = $derived(!!task);
 
-  // Form state
-  let name = $state(task?.config.name ?? '');
-  let executable = $state(task?.config.executable ?? '');
-  let argsRaw = $state((task?.config.arguments ?? []).join(' '));
-  let workingDir = $state(task?.config.working_directory ?? '');
-  let runAsAdmin = $state(task?.config.run_as_admin ?? false);
-  let autoRestart = $state(task?.config.auto_restart ?? false);
-  let cronExpr = $state(task?.config.schedule?.cron ?? '');
-  let startupDelay = $state(task?.config.startup_delay_ms ?? 0);
+  // Form state — untrack() captures the initial prop value intentionally;
+  // these are editable form fields, not derived reactive values.
+  let name = $state(untrack(() => task?.config.name ?? ''));
+  let executable = $state(untrack(() => task?.config.executable ?? ''));
+  let argsRaw = $state(untrack(() => (task?.config.arguments ?? []).join(' ')));
+  let workingDir = $state(untrack(() => task?.config.working_directory ?? ''));
+  let runAsAdmin = $state(untrack(() => task?.config.run_as_admin ?? false));
+  let autoRestart = $state(untrack(() => task?.config.auto_restart ?? false));
+  let cronExpr = $state(untrack(() => task?.config.schedule?.cron ?? ''));
+  let startupDelay = $state(untrack(() => task?.config.startup_delay_ms ?? 0));
   let envRaw = $state(
-    Object.entries(task?.config.environment ?? {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n')
+    untrack(() =>
+      Object.entries(task?.config.environment ?? {})
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n')
+    )
   );
 
   let saving = $state(false);
@@ -81,7 +85,7 @@
   <div class="modal glass-strong">
     <div class="modal-header">
       <h2>{isEdit ? 'Edit Task' : 'New Task'}</h2>
-      <button class="btn-icon" onclick={onClose}>
+      <button class="btn-icon" aria-label="Close" onclick={onClose}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>

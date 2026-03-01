@@ -12,16 +12,19 @@ export const stats = derived(tasks, ($tasks): TaskStats => ({
   crashed: $tasks.filter(t => t.status === 'crashed').length,
 }));
 
-export async function loadTasks() {
-  tasksLoading.set(true);
-  tasksError.set(null);
+export async function loadTasks(silent = false) {
+  if (!silent) {
+    tasksLoading.set(true);
+    tasksError.set(null);
+  }
   try {
     const list = await api.tasks.list();
     tasks.set(list);
+    tasksError.set(null);
   } catch (e) {
     tasksError.set(String(e));
   } finally {
-    tasksLoading.set(false);
+    if (!silent) tasksLoading.set(false);
   }
 }
 
@@ -39,8 +42,8 @@ export async function removeTask(id: string) {
   tasks.update(list => list.filter(t => t.config.id['0'] !== id));
 }
 
-// Poll for status updates every 2 seconds
+// Poll for status updates every 2 seconds (silent — no loading flash)
 export function startPolling(): () => void {
-  const interval = setInterval(loadTasks, 2000);
+  const interval = setInterval(() => loadTasks(true), 2000);
   return () => clearInterval(interval);
 }

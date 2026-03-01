@@ -6,3 +6,7 @@ gui/src-tauri/target
 .env
 dist/
 .tauri/
+
+docs/plans
+.claude
+.vscode

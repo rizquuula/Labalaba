@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustc:*)",
+      "Bash(cargo tauri:*)",
+      "Bash(cargo install:*)",
+      "Bash(tauri:*)",
+      "Bash(cargo check:*)",
+      "Bash(npm create:*)",
+      "Bash(mkdir:*)",
+      "Bash(rustup:*)",
+      "Bash(link:*)",
+      "Bash(cargo +stable-x86_64-pc-windows-gnu:*)",
+      "Bash(npm run:*)",
+      "Bash(cargo build:*)"
+    ]
+  }
+}

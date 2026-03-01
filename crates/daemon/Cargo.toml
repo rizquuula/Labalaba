@@ -1,0 +1,28 @@
+[package]
+name = "labalaba-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "labalaba-daemon"
+path = "src/main.rs"
+
+[dependencies]
+labalaba-shared = { path = "../shared" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+reqwest = { workspace = true }
+tokio-stream = "0.1"
+futures-util = "0.3"
+async-trait = "0.1"
+cron = "0.12"

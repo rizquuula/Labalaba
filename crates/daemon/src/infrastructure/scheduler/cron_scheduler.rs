@@ -9,11 +9,13 @@ use crate::domain::scheduler::service::SchedulerService;
 use crate::infrastructure::state::AppState;
 use crate::application::task::start_task::StartTask;
 
+#[allow(dead_code)]
 pub struct CronScheduler {
     handles: RwLock<HashMap<TaskId, JoinHandle<()>>>,
     state: Arc<AppState>,
 }
 
+#[allow(dead_code)]
 impl CronScheduler {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { handles: RwLock::new(HashMap::new()), state }

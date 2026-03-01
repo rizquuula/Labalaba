@@ -2,12 +2,14 @@ use cron::Schedule as CronSchedule;
 use std::str::FromStr;
 
 /// Validated cron schedule value object
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ValidatedSchedule {
     pub expression: String,
     inner: CronSchedule,
 }
 
+#[allow(dead_code)]
 impl ValidatedSchedule {
     pub fn parse(expr: &str) -> anyhow::Result<Self> {
         let inner = CronSchedule::from_str(expr)

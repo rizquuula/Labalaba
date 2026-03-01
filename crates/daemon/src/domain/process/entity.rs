@@ -11,9 +11,3 @@ impl std::fmt::Debug for ProcessHandle {
         f.debug_struct("ProcessHandle").field("pid", &self.pid).finish()
     }
 }
-
-/// Lightweight info about a process (safe to clone/send)
-#[derive(Debug, Clone)]
-pub struct ProcessInfo {
-    pub pid: u32,
-}

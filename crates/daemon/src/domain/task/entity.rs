@@ -18,26 +18,6 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(
-        id: TaskId,
-        name: impl Into<String>,
-        executable: impl Into<String>,
-    ) -> Self {
-        Self {
-            id,
-            name: name.into(),
-            executable: executable.into(),
-            arguments: Vec::new(),
-            working_directory: None,
-            environment: HashMap::new(),
-            run_as_admin: false,
-            auto_restart: false,
-            schedule: None,
-            startup_delay_ms: 0,
-            depends_on: Vec::new(),
-        }
-    }
-
     /// Validate the task configuration before persisting or spawning
     pub fn validate(&self) -> Result<(), TaskValidationError> {
         if self.name.trim().is_empty() {

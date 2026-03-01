@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use labalaba_shared::task::TaskId;
 
 /// Port: manages scheduled task execution triggers
+#[allow(dead_code)]
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
     /// Register a cron schedule for a task

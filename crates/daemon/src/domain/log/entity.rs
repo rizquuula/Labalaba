@@ -2,9 +2,6 @@ use labalaba_shared::task::TaskId;
 use labalaba_shared::api::{LogEntry, LogStream};
 use tokio::sync::broadcast;
 
-/// Maximum log lines buffered per task in memory
-pub const DEFAULT_LOG_BUFFER: usize = 5000;
-
 /// A broadcast channel for streaming log lines to WebSocket subscribers
 pub type LogBroadcaster = broadcast::Sender<LogEntry>;
 pub type LogReceiver = broadcast::Receiver<LogEntry>;

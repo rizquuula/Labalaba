@@ -4,11 +4,13 @@ use std::collections::VecDeque;
 use labalaba_shared::api::LogEntry;
 
 /// A fixed-size circular buffer for recent log lines.
+#[allow(dead_code)]
 pub struct LogBuffer {
     max_lines: usize,
     lines: VecDeque<LogEntry>,
 }
 
+#[allow(dead_code)]
 impl LogBuffer {
     pub fn new(max_lines: usize) -> Self {
         Self { max_lines, lines: VecDeque::with_capacity(max_lines) }

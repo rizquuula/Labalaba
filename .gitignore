@@ -10,3 +10,6 @@ dist/
 docs/plans
 .claude
 .vscode
+
+CLAUDE.md
+AGENTS.md

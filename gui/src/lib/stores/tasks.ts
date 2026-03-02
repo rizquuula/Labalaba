@@ -32,14 +32,14 @@ export async function refreshTask(id: string) {
   try {
     const updated = await api.tasks.get(id);
     tasks.update(list => list.map(t =>
-      t.config.id[0] === id ? updated : t
+      t.config.id === id ? updated : t
     ));
   } catch { /* ignore */ }
 }
 
 export async function removeTask(id: string) {
   await api.tasks.remove(id);
-  tasks.update(list => list.filter(t => t.config.id[0] !== id));
+  tasks.update(list => list.filter(t => t.config.id !== id));
 }
 
 // Poll for status updates every 2 seconds (silent — no loading flash)

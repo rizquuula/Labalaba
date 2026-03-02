@@ -7,7 +7,7 @@ export interface ApiResponse<T> {
 }
 
 export interface TaskConfig {
-  id: string[];
+  id: string;
   description: string;
   executable: string;
   arguments: string[];
@@ -17,7 +17,7 @@ export interface TaskConfig {
   auto_restart: boolean;
   schedule?: { cron: string };
   startup_delay_ms: number;
-  depends_on: string[][];
+  depends_on: string[];
 }
 
 export interface TaskDto {
@@ -64,7 +64,7 @@ export interface TaskRequest {
   auto_restart: boolean;
   schedule?: { cron: string };
   startup_delay_ms: number;
-  depends_on: string[];
+  depends_on?: string[];
 }
 
 let daemonPort = 27015;
@@ -117,5 +117,5 @@ export const api = {
 };
 
 export function taskId(task: TaskDto): string {
-  return task.config.id[0];
+  return task.config.id;
 }

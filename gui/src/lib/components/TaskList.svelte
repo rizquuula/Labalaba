@@ -45,7 +45,7 @@
     </div>
   {:else}
     <div class="cards">
-      {#each $tasks as task (task.config.id['0'])}
+      {#each $tasks as task (task.config.id)}
         <TaskCard {task} {onViewLogs} {onEdit} />
       {/each}
     </div>

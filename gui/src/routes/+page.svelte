@@ -15,7 +15,7 @@
   let activeLogTaskId = $state<string | null>(null);
 
   const activeLogTask = $derived(
-    activeLogTaskId ? $tasks.find(t => t.config.id['0'] === activeLogTaskId) : null
+    activeLogTaskId ? $tasks.find(t => t.config.id === activeLogTaskId) : null
   );
 
   let stopPolling: (() => void) | null = null;
@@ -59,7 +59,7 @@
 
     {#if activeLogTask}
       <LogViewer
-        taskId={activeLogTask.config.id[0]}
+        taskId={activeLogTask.config.id}
         taskName={activeLogTask.config.description}
         onClose={closeLogs}
       />

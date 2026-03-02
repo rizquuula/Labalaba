@@ -7,7 +7,7 @@ gui/src-tauri/target
 dist/
 .tauri/
 
-docs/plans
+# docs/plans tracked intentionally
 .claude
 .vscode
 

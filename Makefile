@@ -1,13 +1,22 @@
-.PHONY: dev build build-be check install cargo-check test clean help
+.PHONY: dev dev-fe dev-be stop build build-be check install cargo-check test clean help
 
 .DEFAULT_GOAL := dev
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
+# - Development -----------------------------
 
-dev: ## Start full dev environment (FE + BE, hot-reload)
-	@echo "Starting backend (daemon)..."
-	@cargo run -p labalaba-daemon & \
-	cd gui && npm run dev
+dev: ## Start Tauri app (daemon + GUI with hot-reload)
+	cd gui && npm run tauri dev
+
+# - Frontend ---------------------------------
+
+dev-fe: ## Start frontend only with npm (Vite dev server)
+	@powershell -ExecutionPolicy Bypass -File dev-fe.ps1
+
+dev-be: ## Start backend daemon only
+	@powershell -ExecutionPolicy Bypass -File dev-be.ps1
+
+stop: ## Kill all dev processes (daemon + Tauri)
+	@powershell -ExecutionPolicy Bypass -File stop.ps1
 
 build: ## Build frontend and backend (release)
 	cd gui && npm run build
@@ -22,7 +31,7 @@ check: ## Svelte + TypeScript validation
 install: ## Install frontend npm dependencies
 	cd gui && npm install
 
-# ── Rust ──────────────────────────────────────────────────────────────────────
+# - Rust -----------------------------------
 
 cargo-check: ## Type-check daemon and shared crates
 	cargo check -p labalaba-daemon
@@ -31,13 +40,13 @@ cargo-check: ## Type-check daemon and shared crates
 test: ## Run all Rust tests
 	cargo test
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# - Cleanup ---------------------------------─
 
 clean: ## Remove build artifacts (target/, node_modules/, .svelte-kit/)
 	cargo clean
 	rm -rf gui/node_modules gui/.svelte-kit gui/build
 
-# ── Help ──────────────────────────────────────────────────────────────────────
+# - Help -----------------------------------
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \

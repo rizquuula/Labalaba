@@ -16,6 +16,6 @@ Write-Host "Daemon is running on port $port" -ForegroundColor Green
 
 # Start Vite dev server (frontend only)
 Write-Host "Starting Vite dev server (frontend only)..." -ForegroundColor Cyan
-$guiDir = Join-Path $PSScriptRoot "gui"
+$guiDir = Join-Path $PSScriptRoot "..\gui"
 Set-Location $guiDir
 npm run dev

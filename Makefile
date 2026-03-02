@@ -10,13 +10,13 @@ dev: ## Start Tauri app (daemon + GUI with hot-reload)
 # - Frontend ---------------------------------
 
 dev-fe: ## Start frontend only with npm (Vite dev server)
-	@powershell -ExecutionPolicy Bypass -File dev-fe.ps1
+	@powershell -ExecutionPolicy Bypass -File scripts/dev-fe.ps1
 
 dev-be: ## Start backend daemon only
-	@powershell -ExecutionPolicy Bypass -File dev-be.ps1
+	@powershell -ExecutionPolicy Bypass -File scripts/dev-be.ps1
 
 stop: ## Kill all dev processes (daemon + Tauri)
-	@powershell -ExecutionPolicy Bypass -File stop.ps1
+	@powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
 
 build: ## Build frontend and backend (release)
 	cd gui && npm run build

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Unique identifier for a task
@@ -47,7 +47,7 @@ pub struct Schedule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskConfig {
     pub id: TaskId,
-    pub name: String,
+    pub description: String,
     pub executable: String,
     #[serde(default)]
     pub arguments: Vec<String>,
@@ -78,7 +78,7 @@ pub struct TaskDto {
 /// Payload for creating or updating a task
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRequest {
-    pub name: String,
+    pub description: String,
     pub executable: String,
     #[serde(default)]
     pub arguments: Vec<String>,

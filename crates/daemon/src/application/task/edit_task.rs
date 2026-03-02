@@ -13,7 +13,7 @@ impl<'a> EditTask<'a> {
 
         let updated = Task {
             id: existing.id,
-            name: req.name,
+            description: req.description,
             executable: req.executable,
             arguments: req.arguments,
             working_directory: req.working_directory,

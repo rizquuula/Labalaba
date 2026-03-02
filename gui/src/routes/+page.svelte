@@ -59,8 +59,8 @@
 
     {#if activeLogTask}
       <LogViewer
-        taskId={activeLogTask.config.id['0']}
-        taskName={activeLogTask.config.name}
+        taskId={activeLogTask.config.id[0]}
+        taskName={activeLogTask.config.description}
         onClose={closeLogs}
       />
     {/if}

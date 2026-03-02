@@ -28,7 +28,7 @@
   }
 
   async function handleDelete() {
-    if (!confirm(`Delete task "${task.config.name}"?`)) return;
+    if (!confirm(`Delete task "${task.config.description}"?`)) return;
     await action(() => api.tasks.remove(id));
   }
 </script>
@@ -38,7 +38,7 @@
   <div class="card-header">
     <div class="task-info">
       <span class={`status-badge status-${task.status}`}>{task.status}</span>
-      <h3 class="task-name">{task.config.name}</h3>
+      <h3 class="task-name">{task.config.description}</h3>
     </div>
     <div class="card-actions">
       <!-- Start / Stop / Restart -->

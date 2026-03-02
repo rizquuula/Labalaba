@@ -7,8 +7,8 @@ export interface ApiResponse<T> {
 }
 
 export interface TaskConfig {
-  id: { '0': string };
-  name: string;
+  id: string[];
+  description: string;
   executable: string;
   arguments: string[];
   working_directory?: string;
@@ -17,7 +17,7 @@ export interface TaskConfig {
   auto_restart: boolean;
   schedule?: { cron: string };
   startup_delay_ms: number;
-  depends_on: Array<{ '0': string }>;
+  depends_on: string[][];
 }
 
 export interface TaskDto {
@@ -55,7 +55,7 @@ export interface UpdateInfo {
 }
 
 export interface TaskRequest {
-  name: string;
+  description: string;
   executable: string;
   arguments: string[];
   working_directory?: string;
@@ -117,5 +117,5 @@ export const api = {
 };
 
 export function taskId(task: TaskDto): string {
-  return task.config.id['0'];
+  return task.config.id[0];
 }

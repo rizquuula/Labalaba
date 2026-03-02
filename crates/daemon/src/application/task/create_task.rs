@@ -10,7 +10,7 @@ impl<'a> CreateTask<'a> {
     pub async fn execute(&self, req: TaskRequest) -> anyhow::Result<Task> {
         let task = Task {
             id: TaskId::new(),
-            name: req.name,
+            description: req.description,
             executable: req.executable,
             arguments: req.arguments,
             working_directory: req.working_directory,

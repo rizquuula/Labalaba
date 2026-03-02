@@ -1,18 +1,17 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { open } from '@tauri-apps/plugin-dialog';
   import { api, type TaskDto, type TaskRequest, taskId } from '$lib/api/client';
   import { loadTasks } from '$lib/stores/tasks';
 
   let { task, onClose } = $props<{
-    task?: TaskDto;     // undefined = create mode
+    task?: TaskDto;
     onClose: () => void;
   }>();
 
   const isEdit = $derived(!!task);
 
-  // Form state — untrack() captures the initial prop value intentionally;
-  // these are editable form fields, not derived reactive values.
-  let name = $state(untrack(() => task?.config.name ?? ''));
+  let name = $state(untrack(() => task?.config.description ?? ''));
   let executable = $state(untrack(() => task?.config.executable ?? ''));
   let argsRaw = $state(untrack(() => (task?.config.arguments ?? []).join(' ')));
   let workingDir = $state(untrack(() => task?.config.working_directory ?? ''));
@@ -28,6 +27,7 @@
     )
   );
 
+  let activeTab = $state<'basic' | 'advanced'>('basic');
   let saving = $state(false);
   let error = $state<string | null>(null);
 
@@ -42,15 +42,33 @@
     return env;
   }
 
+  async function pickExecutable() {
+    const selected = await open({
+      multiple: false,
+      filters: [{
+        name: 'Executable',
+        extensions: ['exe', 'bat', 'cmd', 'ps1']
+      }]
+    });
+    if (selected && typeof selected === 'string') {
+      executable = selected;
+      if (!workingDir) {
+        const parts = selected.replace(/\\/g, '/').split('/');
+        parts.pop();
+        workingDir = parts.join('/');
+      }
+    }
+  }
+
   async function handleSubmit(e: Event) {
     e.preventDefault();
     if (!name.trim() || !executable.trim()) {
-      error = 'Name and executable are required';
+      error = 'Description and executable are required';
       return;
     }
 
     const req: TaskRequest = {
-      name: name.trim(),
+      description: name.trim(),
       executable: executable.trim(),
       arguments: argsRaw.trim() ? argsRaw.trim().split(/\s+/) : [],
       working_directory: workingDir.trim() || undefined,
@@ -78,7 +96,6 @@
       saving = false;
     }
   }
-
 </script>
 
 <div class="modal-backdrop" role="dialog" aria-modal="true">
@@ -92,69 +109,93 @@
       </button>
     </div>
 
-    <form onsubmit={handleSubmit}>
-      <div class="form-grid">
-        <div class="form-group full">
-          <label for="task-name">Task Name *</label>
-          <input id="task-name" class="input" type="text" bind:value={name}
-            placeholder="My Application" required />
-        </div>
+    <div class="tabs">
+      <button
+        class="tab"
+        class:active={activeTab === 'basic'}
+        onclick={() => activeTab = 'basic'}
+      >
+        Basic
+      </button>
+      <button
+        class="tab"
+        class:active={activeTab === 'advanced'}
+        onclick={() => activeTab = 'advanced'}
+      >
+        Advanced
+      </button>
+    </div>
 
-        <div class="form-group full">
-          <label for="task-exe">Executable Path *</label>
-          <div class="input-row">
-            <input id="task-exe" class="input" type="text" bind:value={executable}
-              placeholder="C:\path\to\app.exe" required />
+    <form onsubmit={handleSubmit}>
+      {#if activeTab === 'basic'}
+        <div class="form-grid">
+          <div class="form-group full">
+            <label for="task-exe">Executable Path *</label>
+            <div class="input-row">
+              <input id="task-exe" class="input" type="text" bind:value={executable}
+                placeholder="C:\path\to\app.exe" required />
+              <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
+                Browse
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group full">
+            <label for="task-args">Arguments</label>
+            <input id="task-args" class="input" type="text" bind:value={argsRaw}
+              placeholder="--port 8080 --config config.yaml" />
+          </div>
+
+          <div class="form-group full">
+            <label for="task-name">Description *</label>
+            <input id="task-name" class="input" type="text" bind:value={name}
+              placeholder="My Application" required />
           </div>
         </div>
+      {:else}
+        <div class="form-grid">
+          <div class="form-group full">
+            <label for="task-wd">Working Directory</label>
+            <input id="task-wd" class="input" type="text" bind:value={workingDir}
+              placeholder="C:\path\to\workdir (optional)" />
+          </div>
 
-        <div class="form-group full">
-          <label for="task-args">Arguments</label>
-          <input id="task-args" class="input" type="text" bind:value={argsRaw}
-            placeholder="--port 8080 --config config.yaml" />
-        </div>
+          <div class="form-group full">
+            <label for="task-env">Environment Variables <span class="label-hint">(KEY=VALUE per line)</span></label>
+            <textarea id="task-env" class="input textarea" rows="3" bind:value={envRaw}
+              placeholder="NODE_ENV=production&#10;PORT=8080"></textarea>
+          </div>
 
-        <div class="form-group full">
-          <label for="task-wd">Working Directory</label>
-          <input id="task-wd" class="input" type="text" bind:value={workingDir}
-            placeholder="C:\path\to\workdir (optional)" />
-        </div>
+          <div class="form-group">
+            <label for="task-cron">Cron Schedule</label>
+            <input id="task-cron" class="input" type="text" bind:value={cronExpr}
+              placeholder="0 */6 * * * (optional)" />
+          </div>
 
-        <div class="form-group full">
-          <label for="task-env">Environment Variables <span class="label-hint">(KEY=VALUE per line)</span></label>
-          <textarea id="task-env" class="input textarea" rows="3" bind:value={envRaw}
-            placeholder="NODE_ENV=production&#10;PORT=8080"></textarea>
-        </div>
+          <div class="form-group">
+            <label for="task-delay">Startup Delay (ms)</label>
+            <input id="task-delay" class="input" type="number" min="0" bind:value={startupDelay} />
+          </div>
 
-        <div class="form-group">
-          <label for="task-cron">Cron Schedule</label>
-          <input id="task-cron" class="input" type="text" bind:value={cronExpr}
-            placeholder="0 */6 * * * (optional)" />
-        </div>
-
-        <div class="form-group">
-          <label for="task-delay">Startup Delay (ms)</label>
-          <input id="task-delay" class="input" type="number" min="0" bind:value={startupDelay} />
-        </div>
-
-        <div class="toggles">
-          <label class="toggle-label">
-            <span>Run as Admin</span>
-            <label class="toggle">
-              <input type="checkbox" bind:checked={runAsAdmin} />
-              <span class="toggle-track"></span>
+          <div class="toggles">
+            <label class="toggle-label">
+              <span>Run as Admin</span>
+              <label class="toggle">
+                <input type="checkbox" bind:checked={runAsAdmin} />
+                <span class="toggle-track"></span>
+              </label>
             </label>
-          </label>
 
-          <label class="toggle-label">
-            <span>Auto-restart on crash</span>
-            <label class="toggle">
-              <input type="checkbox" bind:checked={autoRestart} />
-              <span class="toggle-track"></span>
+            <label class="toggle-label">
+              <span>Auto-restart on crash</span>
+              <label class="toggle">
+                <input type="checkbox" bind:checked={autoRestart} />
+                <span class="toggle-track"></span>
+              </label>
             </label>
-          </label>
+          </div>
         </div>
-      </div>
+      {/if}
 
       {#if error}
         <p class="form-error">{error}</p>
@@ -175,12 +216,41 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1rem;
   }
 
   .modal-header h2 {
     font-size: 1.0625rem;
     font-weight: 700;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .tab {
+    background: none;
+    border: none;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .tab:hover {
+    color: var(--text-primary);
+  }
+
+  .tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent);
   }
 
   .form-grid {

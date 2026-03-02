@@ -1,14 +1,20 @@
-.PHONY: dev build check install cargo-check test run-daemon clean help
+.PHONY: dev build build-be check install cargo-check test clean help
 
 .DEFAULT_GOAL := dev
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
-dev: ## Start full dev environment (GUI + daemon, hot-reload)
-	cd gui && npm run tauri dev
+dev: ## Start full dev environment (FE + BE, hot-reload)
+	@echo "Starting backend (daemon)..."
+	@cargo run -p labalaba-daemon & \
+	cd gui && npm run dev
 
-build: ## Production release build (MSI / AppImage / DMG)
-	cd gui && npm run tauri build
+build: ## Build frontend and backend (release)
+	cd gui && npm run build
+	cargo build -p labalaba-daemon --release
+
+build-be: ## Build backend only (release)
+	cargo build -p labalaba-daemon --release
 
 check: ## Svelte + TypeScript validation
 	cd gui && npm run check
@@ -24,9 +30,6 @@ cargo-check: ## Type-check daemon and shared crates
 
 test: ## Run all Rust tests
 	cargo test
-
-run-daemon: ## Start daemon standalone (debug mode)
-	cargo run -p labalaba-daemon
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 

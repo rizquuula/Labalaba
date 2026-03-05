@@ -1,4 +1,6 @@
-// WebSocket client for real-time log streaming from the daemon
+// Tauri event listener — replaces the WebSocket layer for log streaming
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface LogEntry {
   task_id: string;
@@ -9,49 +11,36 @@ export interface LogEntry {
 
 export type LogListener = (entry: LogEntry) => void;
 
-let daemonPort = 27015;
-
-export function setWsDaemonPort(port: number) {
-  daemonPort = port;
-}
-
-/** Opens a WebSocket for a task's log stream. Returns a cleanup function. */
+/** Subscribes to real-time log events for a task. Returns a cleanup function. */
 export function connectLogStream(
   taskId: string,
   onEntry: LogListener,
   onClose?: () => void,
 ): () => void {
-  const ws = new WebSocket(`ws://127.0.0.1:${daemonPort}/ws/logs/${taskId}`);
+  let unlisten: (() => void) | undefined;
 
-  ws.onmessage = (ev) => {
-    try {
-      const entry: LogEntry = JSON.parse(ev.data);
-      onEntry(entry);
-    } catch {
-      // ignore malformed frames
+  listen<LogEntry>(`log:${taskId}`, (event) => {
+    onEntry(event.payload);
+  }).then((fn) => {
+    unlisten = fn;
+  });
+
+  // Return cleanup — call the unlisten fn when available
+  return () => {
+    if (unlisten) {
+      unlisten();
     }
+    onClose?.();
   };
-
-  ws.onclose = () => onClose?.();
-  ws.onerror = () => ws.close();
-
-  return () => ws.close();
 }
 
-/** Fetches historical logs from the daemon via HTTP */
+/** Fetches historical logs via Tauri command */
 export async function fetchHistoricalLogs(
   taskId: string,
   lines: number = 500,
 ): Promise<LogEntry[]> {
   try {
-    const response = await fetch(`http://127.0.0.1:${daemonPort}/api/logs/${taskId}?lines=${lines}`);
-    const data = await response.json();
-    
-    if (data.success && data.data?.logs) {
-      return data.data.logs;
-    }
-    
-    return [];
+    return await invoke<LogEntry[]>('get_logs', { id: taskId, lines });
   } catch (error) {
     console.error('Failed to fetch historical logs:', error);
     return [];

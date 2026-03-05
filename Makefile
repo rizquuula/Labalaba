@@ -1,14 +1,11 @@
-.PHONY: dev-fe dev-be stop build build-be check install cargo-check test clean help
+.PHONY: dev stop build build-be check install cargo-check test clean help
 
 .DEFAULT_GOAL := help
 
-# - Frontend ---------------------------------
+# - Dev ---------------------------------
 
-dev-fe: ## Start Tauri app (daemon + GUI with hot-reload)
-	cd gui && npm run tauri dev
-
-dev-be: ## Start backend daemon only
-	@powershell -ExecutionPolicy Bypass -File scripts/dev-be.ps1
+dev: ## Start Tauri app (daemon + GUI with hot-reload)
+	cd gui && LABALABA_DATA_DIR="$(CURDIR)" npm run tauri dev
 
 stop: ## Kill all dev processes (daemon + Tauri)
 	@powershell -ExecutionPolicy Bypass -File scripts/stop.ps1

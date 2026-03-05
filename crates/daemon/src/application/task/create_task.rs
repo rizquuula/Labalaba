@@ -1,12 +1,13 @@
+use std::sync::Arc;
 use labalaba_shared::task::{TaskId, TaskRequest};
 use crate::domain::task::entity::Task;
 use crate::domain::task::repository::TaskRepository;
 
-pub struct CreateTask<'a> {
-    pub repo: &'a dyn TaskRepository,
+pub struct CreateTask {
+    pub repo: Arc<dyn TaskRepository>,
 }
 
-impl<'a> CreateTask<'a> {
+impl CreateTask {
     pub async fn execute(&self, req: TaskRequest) -> anyhow::Result<Task> {
         let task = Task {
             id: TaskId::new(),

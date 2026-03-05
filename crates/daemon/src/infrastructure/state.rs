@@ -4,7 +4,7 @@ use crate::domain::task::repository::TaskRepository;
 use crate::domain::task::status::TaskRuntimeState;
 use crate::infrastructure::log::file_writer::LogFileWriter;
 use crate::infrastructure::updater::github_updater::GithubUpdater;
-use labalaba_shared::api::AppSettings;
+use labalaba_shared::api::{AppSettings, LogEntry};
 use labalaba_shared::task::TaskId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,6 +26,9 @@ pub struct AppState {
     pub restart_tx: mpsc::Sender<TaskId>,
     /// Log file writer for persisting logs to disk
     pub log_writer: LogFileWriter,
+    /// Optional callback invoked on every log entry (used for Tauri event emission).
+    /// Keeps the daemon crate Tauri-agnostic.
+    pub log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
 }
 
 impl AppState {
@@ -36,6 +39,7 @@ impl AppState {
         settings: AppSettings,
         restart_tx: mpsc::Sender<TaskId>,
         log_writer: LogFileWriter,
+        log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             task_repo,
@@ -46,6 +50,7 @@ impl AppState {
             log_channels: RwLock::new(HashMap::new()),
             restart_tx,
             log_writer,
+            log_event_callback,
         })
     }
 }

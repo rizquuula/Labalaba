@@ -66,17 +66,21 @@ impl StartTask {
         let log_writer = self.state.log_writer.clone();
         log_writer.open(&id).await?;
 
+        let log_cb = self.state.log_event_callback.clone();
+
         // Spawn stdout collector
         if let Some(stdout) = handle.child.stdout.take() {
             let tx = broadcaster.clone();
             let id_out = id.clone();
             let writer = log_writer.clone();
+            let cb = log_cb.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = make_log_entry(&id_out, LogStream::Stdout, line);
                     let _ = tx.send(entry.clone());
                     let _ = writer.write(&id_out, &entry).await;
+                    if let Some(ref cb) = cb { cb(entry); }
                 }
             });
         }
@@ -86,12 +90,14 @@ impl StartTask {
             let tx = broadcaster.clone();
             let id_err = id.clone();
             let writer = log_writer.clone();
+            let cb = log_cb.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let entry = make_log_entry(&id_err, LogStream::Stderr, line);
                     let _ = tx.send(entry.clone());
                     let _ = writer.write(&id_err, &entry).await;
+                    if let Some(ref cb) = cb { cb(entry); }
                 }
             });
         }

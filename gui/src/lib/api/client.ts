@@ -1,10 +1,5 @@
-// HTTP client that talks to the labalaba-daemon REST API
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
+// Tauri command client — replaces the HTTP fetch layer
+import { invoke } from '@tauri-apps/api/core';
 
 export interface TaskConfig {
   id: string;
@@ -18,6 +13,7 @@ export interface TaskConfig {
   schedule?: { cron: string };
   startup_delay_ms: number;
   depends_on: string[];
+  pids: number[];
 }
 
 export interface TaskDto {
@@ -67,52 +63,24 @@ export interface TaskRequest {
   depends_on?: string[];
 }
 
-let daemonPort = 27015;
-
-export function setDaemonPort(port: number) {
-  daemonPort = port;
-}
-
-function base(): string {
-  return `http://127.0.0.1:${daemonPort}`;
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${base()}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
-  const body: ApiResponse<T> = await res.json();
-  if (!body.success || body.data === undefined) {
-    throw new Error(body.error ?? 'Unknown error');
-  }
-  return body.data;
-}
-
 export const api = {
   tasks: {
-    list: () => request<TaskDto[]>('/api/tasks'),
-    get: (id: string) => request<TaskDto>(`/api/tasks/${id}`),
-    create: (req: TaskRequest) => request<TaskDto>('/api/tasks', {
-      method: 'POST', body: JSON.stringify(req),
-    }),
-    update: (id: string, req: TaskRequest) => request<TaskDto>(`/api/tasks/${id}`, {
-      method: 'PUT', body: JSON.stringify(req),
-    }),
-    remove: (id: string) => request<void>(`/api/tasks/${id}`, { method: 'DELETE' }),
-    start: (id: string) => request<number>(`/api/tasks/${id}/start`, { method: 'POST' }),
-    stop: (id: string) => request<void>(`/api/tasks/${id}/stop`, { method: 'POST' }),
-    restart: (id: string) => request<number>(`/api/tasks/${id}/restart`, { method: 'POST' }),
+    list: () => invoke<TaskDto[]>('list_tasks'),
+    get: (id: string) => invoke<TaskDto>('get_task', { id }),
+    create: (req: TaskRequest) => invoke<TaskDto>('create_task', { req }),
+    update: (id: string, req: TaskRequest) => invoke<TaskDto>('update_task', { id, req }),
+    remove: (id: string) => invoke<void>('delete_task', { id }),
+    start: (id: string) => invoke<number>('start_task', { id }),
+    stop: (id: string) => invoke<void>('stop_task', { id }),
+    restart: (id: string) => invoke<number>('restart_task', { id }),
   },
-  stats: () => request<TaskStats>('/api/stats'),
+  stats: () => invoke<TaskStats>('get_stats'),
   settings: {
-    get: () => request<AppSettings>('/api/settings'),
-    update: (s: AppSettings) => request<AppSettings>('/api/settings', {
-      method: 'PUT', body: JSON.stringify(s),
-    }),
+    get: () => invoke<AppSettings>('get_settings'),
+    update: (settings: AppSettings) => invoke<AppSettings>('update_settings', { settings }),
   },
   update: {
-    check: () => request<UpdateInfo>('/api/update/check', { method: 'POST' }),
+    check: () => invoke<UpdateInfo>('check_update'),
   },
 };
 

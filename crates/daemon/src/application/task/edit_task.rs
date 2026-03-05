@@ -1,12 +1,13 @@
+use std::sync::Arc;
 use labalaba_shared::task::{TaskId, TaskRequest};
 use crate::domain::task::entity::Task;
 use crate::domain::task::repository::TaskRepository;
 
-pub struct EditTask<'a> {
-    pub repo: &'a dyn TaskRepository,
+pub struct EditTask {
+    pub repo: Arc<dyn TaskRepository>,
 }
 
-impl<'a> EditTask<'a> {
+impl EditTask {
     pub async fn execute(&self, id: TaskId, req: TaskRequest) -> anyhow::Result<Task> {
         let existing = self.repo.find_by_id(&id).await?
             .ok_or_else(|| anyhow::anyhow!("Task {} not found", id))?;

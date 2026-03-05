@@ -60,7 +60,7 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     Json(req): Json<TaskRequest>,
 ) -> Resp<TaskDto> {
-    let uc = CreateTask { repo: state.task_repo.as_ref() };
+    let uc = CreateTask { repo: Arc::clone(&state.task_repo) };
     match uc.execute(req).await {
         Ok(task) => {
             let rt = TaskRuntimeState::default();
@@ -79,7 +79,7 @@ pub async fn update(
         return err("Invalid task ID", StatusCode::BAD_REQUEST);
     };
     let id = TaskId(uuid);
-    let uc = EditTask { repo: state.task_repo.as_ref() };
+    let uc = EditTask { repo: Arc::clone(&state.task_repo) };
     match uc.execute(id.clone(), req).await {
         Ok(task) => {
             let states = state.runtime_states.read().await;
@@ -98,7 +98,7 @@ pub async fn remove(
         return err("Invalid task ID", StatusCode::BAD_REQUEST);
     };
     let id = TaskId(uuid);
-    let uc = DeleteTask { repo: state.task_repo.as_ref() };
+    let uc = DeleteTask { repo: Arc::clone(&state.task_repo) };
     match uc.execute(id).await {
         Ok(()) => ok(()),
         Err(e) => err(e.to_string(), StatusCode::NOT_FOUND),

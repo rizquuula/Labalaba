@@ -4,6 +4,7 @@ mod infrastructure;
 mod interface;
 
 use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tracing_subscriber::{EnvFilter, fmt};
 use labalaba_shared::api::AppSettings;
@@ -13,6 +14,7 @@ use infrastructure::{
     process::spawner::OsProcessSpawner,
     updater::github_updater::GithubUpdater,
     state::AppState,
+    log::file_writer::LogFileWriter,
 };
 use interface::http::router;
 use application::task::start_task::StartTask;
@@ -52,10 +54,17 @@ async fn main() -> anyhow::Result<()> {
     // Restart channel: background tasks send TaskId here to request a restart
     let (restart_tx, restart_rx) = mpsc::channel::<TaskId>(64);
 
+    let log_writer = LogFileWriter::new(
+        PathBuf::from(&settings.log_dir),
+        settings.log_max_file_size_mb,
+        settings.log_max_rotated_files,
+    );
+    log_writer.init_dir().await?;
+
     let repo = Arc::new(YamlTaskRepository::new(&config_path));
     let spawner = Arc::new(OsProcessSpawner);
     let updater = Arc::new(GithubUpdater::new());
-    let state = AppState::new(repo, spawner, updater, settings, restart_tx);
+    let state = AppState::new(repo, spawner, updater, settings, restart_tx, log_writer);
 
     // Recover runtime states from persisted PIDs on startup
     recover_task_states(Arc::clone(&state)).await;

@@ -62,14 +62,21 @@ impl StartTask {
             logs.entry(id.clone()).or_insert_with(new_log_channel).clone()
         };
 
+        // Open log file writer for this task
+        let log_writer = self.state.log_writer.clone();
+        log_writer.open(&id).await?;
+
         // Spawn stdout collector
         if let Some(stdout) = handle.child.stdout.take() {
             let tx = broadcaster.clone();
             let id_out = id.clone();
+            let writer = log_writer.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(make_log_entry(&id_out, LogStream::Stdout, line));
+                    let entry = make_log_entry(&id_out, LogStream::Stdout, line);
+                    let _ = tx.send(entry.clone());
+                    let _ = writer.write(&id_out, &entry).await;
                 }
             });
         }
@@ -78,10 +85,13 @@ impl StartTask {
         if let Some(stderr) = handle.child.stderr.take() {
             let tx = broadcaster.clone();
             let id_err = id.clone();
+            let writer = log_writer.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(make_log_entry(&id_err, LogStream::Stderr, line));
+                    let entry = make_log_entry(&id_err, LogStream::Stderr, line);
+                    let _ = tx.send(entry.clone());
+                    let _ = writer.write(&id_err, &entry).await;
                 }
             });
         }
@@ -90,6 +100,8 @@ impl StartTask {
         let state_clone = Arc::clone(&self.state);
         let auto_restart = task.auto_restart;
         let restart_tx = self.state.restart_tx.clone();
+        let log_writer = self.state.log_writer.clone();
+        let id_clone = id.clone();
         tokio::spawn(async move {
             let exit_status = handle.child.wait().await.ok();
             let exit_code = exit_status.and_then(|s| s.code());
@@ -97,7 +109,7 @@ impl StartTask {
 
             {
                 let mut states = state_clone.runtime_states.write().await;
-                let rt = states.entry(id.clone()).or_default();
+                let rt = states.entry(id_clone.clone()).or_default();
                 if crashed {
                     rt.mark_crashed(exit_code);
                 } else {
@@ -105,10 +117,12 @@ impl StartTask {
                 }
             }
 
+            let _ = log_writer.close(&id_clone).await;
+
             if crashed && auto_restart {
-                tracing::info!("Task {} crashed (code {:?}), queuing auto-restart", id, exit_code);
+                tracing::info!("Task {} crashed (code {:?}), queuing auto-restart", id_clone, exit_code);
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                let _ = restart_tx.send(id).await;
+                let _ = restart_tx.send(id_clone).await;
             }
         });
 

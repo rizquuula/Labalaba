@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { connectLogStream, type LogEntry } from '$lib/api/websocket';
+  import { connectLogStream, fetchHistoricalLogs, type LogEntry } from '$lib/api/websocket';
 
   let { taskId, taskName, onClose } = $props<{
     taskId: string;
@@ -11,9 +11,22 @@
   let container: HTMLDivElement;
   let logs = $state<LogEntry[]>([]);
   let autoScroll = $state(true);
+  let loadingHistory = $state(false);
   let disconnect: (() => void) | null = null;
 
-  onMount(() => {
+  onMount(async () => {
+    loadingHistory = true;
+    
+    const history = await fetchHistoricalLogs(taskId, 500);
+    logs = history;
+    loadingHistory = false;
+    
+    if (autoScroll && logs.length > 0) {
+      setTimeout(() => {
+        container?.scrollTo({ top: container.scrollHeight });
+      }, 0);
+    }
+    
     disconnect = connectLogStream(taskId, (entry) => {
       logs = [...logs.slice(-4999), entry];
       if (autoScroll) {
@@ -62,7 +75,9 @@
   </div>
 
   <div class="log-body" bind:this={container}>
-    {#if logs.length === 0}
+    {#if loadingHistory}
+      <p class="log-loading">Loading historical logs…</p>
+    {:else if logs.length === 0}
       <p class="log-empty">Waiting for output…</p>
     {:else}
       {#each logs as entry (entry.timestamp + entry.line)}
@@ -148,6 +163,13 @@
   .log-empty {
     padding: 1rem;
     color: var(--text-muted);
+    font-size: 0.8125rem;
+    font-style: italic;
+  }
+
+  .log-loading {
+    padding: 1rem;
+    color: var(--text-secondary);
     font-size: 0.8125rem;
     font-style: italic;
   }

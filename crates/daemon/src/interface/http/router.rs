@@ -1,17 +1,23 @@
-use std::sync::Arc;
-use axum::{Router, routing};
-use tower_http::cors::CorsLayer;
-use crate::infrastructure::state::AppState;
-use super::task_handler as tasks;
+use super::logs_handler as logs;
 use super::settings_handler as settings;
+use super::task_handler as tasks;
 use super::update_handler as updates;
+use crate::infrastructure::state::AppState;
 use crate::interface::ws::log_handler;
+use axum::{routing, Router};
+use std::sync::Arc;
+use tower_http::cors::CorsLayer;
 
 pub fn build(state: Arc<AppState>) -> Router {
     Router::new()
         // Task CRUD
         .route("/api/tasks", routing::get(tasks::list).post(tasks::create))
-        .route("/api/tasks/{id}", routing::get(tasks::get_one).put(tasks::update).delete(tasks::remove))
+        .route(
+            "/api/tasks/{id}",
+            routing::get(tasks::get_one)
+                .put(tasks::update)
+                .delete(tasks::remove),
+        )
         // Task control
         .route("/api/tasks/{id}/start", routing::post(tasks::start))
         .route("/api/tasks/{id}/stop", routing::post(tasks::stop))
@@ -19,9 +25,14 @@ pub fn build(state: Arc<AppState>) -> Router {
         // Stats
         .route("/api/stats", routing::get(tasks::stats))
         // Settings
-        .route("/api/settings", routing::get(settings::get).put(settings::update))
+        .route(
+            "/api/settings",
+            routing::get(settings::get).put(settings::update),
+        )
         // Updates
         .route("/api/update/check", routing::post(updates::check))
+        // Historical logs
+        .route("/api/logs/{id}", routing::get(logs::handler))
         // WebSocket log stream
         .route("/ws/logs/{id}", routing::get(log_handler::handler))
         .layer(CorsLayer::permissive())

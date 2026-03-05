@@ -37,3 +37,23 @@ export function connectLogStream(
 
   return () => ws.close();
 }
+
+/** Fetches historical logs from the daemon via HTTP */
+export async function fetchHistoricalLogs(
+  taskId: string,
+  lines: number = 500,
+): Promise<LogEntry[]> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${daemonPort}/api/logs/${taskId}?lines=${lines}`);
+    const data = await response.json();
+    
+    if (data.success && data.data?.logs) {
+      return data.data.logs;
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('Failed to fetch historical logs:', error);
+    return [];
+  }
+}

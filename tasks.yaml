@@ -1,1 +1,14 @@
-tasks: []
+tasks:
+- id: e266c59f-bed7-436d-af34-c355ddf9bc18
+  description: Data Intelligence
+  executable: D:\EI\agDataIntelligence\build\data-intelligence-v1.1.1-x64windows.exe
+  arguments: []
+  working_directory: D:/EI/agDataIntelligence/build
+  environment: {}
+  run_as_admin: false
+  auto_restart: false
+  schedule: null
+  startup_delay_ms: 0
+  depends_on: []
+  pids:
+  - 20376

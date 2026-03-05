@@ -11,4 +11,7 @@ pub trait ProcessSpawner: Send + Sync {
 
     /// Send a termination signal to the process
     async fn kill(&self, pid: u32) -> anyhow::Result<()>;
+
+    /// Send a termination signal to the process and all its children (process tree)
+    async fn kill_tree(&self, pid: u32) -> anyhow::Result<()>;
 }

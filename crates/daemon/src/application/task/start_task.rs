@@ -48,6 +48,14 @@ impl StartTask {
             states.entry(id.clone()).or_default().mark_running(pid);
         }
 
+        // Register PID to task and persist
+        let task = {
+            let mut task = task;
+            task.pids.push(pid);
+            self.state.task_repo.save(&task).await?;
+            task
+        };
+
         // Ensure a log channel exists for this task
         let broadcaster = {
             let mut logs = self.state.log_channels.write().await;

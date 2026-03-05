@@ -1,16 +1,11 @@
-.PHONY: dev dev-fe dev-be stop build build-be check install cargo-check test clean help
+.PHONY: dev-fe dev-be stop build build-be check install cargo-check test clean help
 
-.DEFAULT_GOAL := dev
-
-# - Development -----------------------------
-
-dev: ## Start Tauri app (daemon + GUI with hot-reload)
-	cd gui && npm run tauri dev
+.DEFAULT_GOAL := help
 
 # - Frontend ---------------------------------
 
-dev-fe: ## Start frontend only with npm (Vite dev server)
-	@powershell -ExecutionPolicy Bypass -File scripts/dev-fe.ps1
+dev-fe: ## Start Tauri app (daemon + GUI with hot-reload)
+	cd gui && npm run tauri dev
 
 dev-be: ## Start backend daemon only
 	@powershell -ExecutionPolicy Bypass -File scripts/dev-be.ps1

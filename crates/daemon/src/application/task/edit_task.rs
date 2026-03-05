@@ -23,6 +23,7 @@ impl<'a> EditTask<'a> {
             schedule: req.schedule,
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on,
+            pids: existing.pids, // Preserve existing PIDs during edit
         };
         updated.validate()?;
         self.repo.save(&updated).await?;

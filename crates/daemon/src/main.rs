@@ -17,6 +17,25 @@ use infrastructure::{
 use interface::http::router;
 use application::task::start_task::StartTask;
 
+/// Check if a process with the given PID is still running
+#[cfg(target_os = "windows")]
+fn is_process_running(pid: u32) -> bool {
+    use std::process::Command;
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+        .output();
+    match output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_process_running(pid: u32) -> bool {
+    // Check if process exists by sending signal 0
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     fmt()
@@ -38,6 +57,9 @@ async fn main() -> anyhow::Result<()> {
     let updater = Arc::new(GithubUpdater::new());
     let state = AppState::new(repo, spawner, updater, settings, restart_tx);
 
+    // Recover runtime states from persisted PIDs on startup
+    recover_task_states(Arc::clone(&state)).await;
+
     // Background loop: drain restart requests and call StartTask
     tokio::spawn(restart_loop(restart_rx, Arc::clone(&state)));
 
@@ -57,6 +79,48 @@ async fn restart_loop(mut rx: mpsc::Receiver<TaskId>, state: Arc<AppState>) {
         let uc = StartTask { state: Arc::clone(&state) };
         if let Err(e) = uc.execute(id.clone()).await {
             tracing::warn!("Auto-restart of {} failed: {}", id, e);
+        }
+    }
+}
+
+/// Recover runtime states for tasks with persisted PIDs on daemon startup.
+/// Checks if PIDs are still running and updates the runtime state accordingly.
+async fn recover_task_states(state: Arc<AppState>) {
+    match state.task_repo.find_all().await {
+        Ok(tasks) => {
+            for task in tasks {
+                if !task.pids.is_empty() {
+                    // Check which PIDs are still alive
+                    let alive_pids: Vec<u32> = task.pids.iter()
+                        .filter(|&&pid| is_process_running(pid))
+                        .copied()
+                        .collect();
+
+                    let mut states = state.runtime_states.write().await;
+                    let rt = states.entry(task.id.clone()).or_default();
+
+                    if !alive_pids.is_empty() {
+                        // At least one PID is still running - mark as Running
+                        rt.mark_running(*alive_pids.first().unwrap());
+                        tracing::info!(
+                            "Recovered task {} as Running with {} alive PID(s)",
+                            task.id,
+                            alive_pids.len()
+                        );
+                    } else {
+                        // No PIDs alive - mark as Crashed
+                        rt.mark_crashed(None);
+                        tracing::info!(
+                            "Recovered task {} as Crashed (no alive PIDs from: {:?})",
+                            task.id,
+                            task.pids
+                        );
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load tasks for recovery: {}", e);
         }
     }
 }

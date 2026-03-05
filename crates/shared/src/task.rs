@@ -63,6 +63,8 @@ pub struct TaskConfig {
     pub startup_delay_ms: u64,
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
+    #[serde(default)]
+    pub pids: Vec<u32>,
 }
 
 /// Task config plus live runtime status — sent to GUI
@@ -71,6 +73,7 @@ pub struct TaskDto {
     pub config: TaskConfig,
     pub status: TaskStatus,
     pub pid: Option<u32>,
+    pub pids: Vec<u32>,
     pub started_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
 }
@@ -94,6 +97,8 @@ pub struct TaskRequest {
     pub startup_delay_ms: u64,
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
+    #[serde(default)]
+    pub pids: Vec<u32>,
 }
 
 /// Summary counts shown in the top statistics bar

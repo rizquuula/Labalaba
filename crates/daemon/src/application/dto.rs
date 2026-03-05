@@ -8,6 +8,7 @@ pub fn task_to_dto(task: &Task, state: &TaskRuntimeState) -> TaskDto {
         config: task_to_config(task),
         status: state.status.clone(),
         pid: state.pid,
+        pids: task.pids.clone(),
         started_at: state.started_at,
         exit_code: state.exit_code,
     }
@@ -27,6 +28,7 @@ pub fn task_to_config(task: &Task) -> TaskConfig {
         schedule: task.schedule.clone(),
         startup_delay_ms: task.startup_delay_ms,
         depends_on: task.depends_on.clone(),
+        pids: task.pids.clone(),
     }
 }
 
@@ -44,5 +46,6 @@ pub fn config_to_task(config: TaskConfig) -> Task {
         schedule: config.schedule,
         startup_delay_ms: config.startup_delay_ms,
         depends_on: config.depends_on,
+        pids: config.pids,
     }
 }

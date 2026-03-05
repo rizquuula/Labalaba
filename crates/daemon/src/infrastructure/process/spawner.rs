@@ -55,4 +55,23 @@ impl ProcessSpawner for OsProcessSpawner {
         }
         Ok(())
     }
+
+    async fn kill_tree(&self, pid: u32) -> anyhow::Result<()> {
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("taskkill")
+                .args(["/PID", &pid.to_string(), "/F", "/T"])
+                .output()
+                .await?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Command::new("kill")
+                .args(["-TERM", "-"])
+                .arg(pid.to_string())
+                .output()
+                .await?;
+        }
+        Ok(())
+    }
 }

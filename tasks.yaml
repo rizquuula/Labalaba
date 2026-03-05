@@ -1,12 +1,1 @@
-tasks:
-- id: cdb8bdbf-d9cb-4638-943f-a568dce5ef34
-  description: IDV
-  executable: D:\EI\agIDV\build\Addon-IDV-0.2.13-win64.exe
-  arguments: []
-  working_directory: D:/EI/agIDV/build
-  environment: {}
-  run_as_admin: false
-  auto_restart: false
-  schedule: null
-  startup_delay_ms: 0
-  depends_on: []
+tasks: []

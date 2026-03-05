@@ -15,6 +15,7 @@ pub struct Task {
     pub schedule: Option<Schedule>,
     pub startup_delay_ms: u64,
     pub depends_on: Vec<TaskId>,
+    pub pids: Vec<u32>,
 }
 
 impl Task {

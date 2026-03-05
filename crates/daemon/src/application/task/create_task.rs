@@ -20,6 +20,7 @@ impl<'a> CreateTask<'a> {
             schedule: req.schedule,
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on,
+            pids: req.pids,
         };
         task.validate()?;
         self.repo.save(&task).await?;

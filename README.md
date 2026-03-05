@@ -46,39 +46,43 @@
 | 🔗 **Task Dependencies** | Start tasks in order with configurable delays |
 | 🌓 **Light / Dark Theme** | Glassmorphism UI with smooth theme toggle |
 | 🔔 **Notifications** | Desktop alerts on crash or unexpected stop |
-| 🔄 **Hot-reload Updates** | Update the GUI without interrupting running tasks |
+| 📦 **Single Binary** | One installer — no separate daemon process to manage |
 | 📊 **Stats Bar** | Live counts of running / stopped / crashed tasks |
 
 ---
 
 ## 🏗️ Architecture
 
-Labalaba uses a **GUI + Daemon** separation so your processes keep running even when the GUI is restarted or updated.
+Labalaba runs as a **single Tauri process** — the daemon logic is embedded directly inside the app. The frontend communicates with the Rust backend via Tauri commands and events (no HTTP, no sockets).
 
 ```
-┌──────────────────────────────┐
-│     Labalaba GUI (Tauri)     │  ← Svelte + TypeScript
-│     Glassmorphism UI         │    Updates without killing tasks
-└──────────────┬───────────────┘
-               │ HTTP REST + WebSocket (localhost)
-┌──────────────┴───────────────┐
-│     Labalaba Daemon (Rust)   │  ← DDD architecture
-│  Domain · Application        │    Stays alive during GUI updates
-│  Infrastructure · Interface  │
-└──────────┬───────────────────┘
-           │ std::process::Command
-   ┌───────┼────────┐
- Task1   Task2   TaskN
+┌─────────────────────────────────────────┐
+│           Labalaba (Tauri App)           │
+│                                          │
+│  ┌───────────────────────────────────┐  │
+│  │  SvelteKit UI (WebView)           │  │  ← Svelte + TypeScript
+│  │  invoke() · listen()              │  │
+│  └──────────────┬────────────────────┘  │
+│                 │ Tauri commands/events  │
+│  ┌──────────────┴────────────────────┐  │
+│  │  Daemon Logic (Rust / tokio)      │  │  ← DDD architecture
+│  │  AppState · Use Cases             │  │    Embedded in Tauri process
+│  │  YAML persistence · Log streaming │  │
+│  └──────────────┬────────────────────┘  │
+└─────────────────┼────────────────────────┘
+                  │ std::process::Command
+         ┌────────┼────────┐
+       Task1    Task2    TaskN  ← OS processes, managed by PID
 ```
 
-The daemon is built with **Domain-Driven Design** (DDD):
+The daemon logic is built with **Domain-Driven Design** (DDD):
 
 ```
 crates/daemon/src/
 ├── domain/          # Entities, value objects, repository traits
 ├── application/     # One use case per file (StartTask, StopTask, …)
 ├── infrastructure/  # YAML persistence, process spawner, log collector
-└── interface/       # HTTP handlers (axum) + WebSocket log streaming
+└── interface/       # axum HTTP handlers (used by standalone daemon only)
 ```
 
 ---
@@ -103,37 +107,24 @@ Grab the latest release for your platform:
 git clone https://github.com/rizquuula/labalaba.git
 cd labalaba
 
-# Install frontend deps
-cd gui && npm install && cd ..
-
-# Build & run in dev mode
-cd gui && npm run tauri dev
-
-# Build release
-cd gui && npm run tauri build
+make install   # install frontend npm dependencies
+make dev       # dev mode: Tauri app + hot-reload frontend
+make build     # release build (produces installer in gui/src-tauri/target/release/bundle/)
 ```
-
-The daemon binary is at `target/release/labalaba-daemon`. Run it before launching the GUI.
 
 ---
 
 ## 🚀 Quick Start
 
-**1. Start the daemon**
-```bash
-./labalaba-daemon
-# Listening on http://127.0.0.1:27015
-```
+**1. Launch the app**
 
-**2. Launch the GUI**
+Open Labalaba. The daemon starts automatically inside the app — nothing else to run.
 
-Open the Labalaba desktop app. It connects to the daemon automatically.
-
-**3. Add a task**
+**2. Add a task**
 
 Click **New Task** → fill in the executable path → **Create Task**.
 
-**4. Start it**
+**3. Start it**
 
 Hit ▶ **Start** on the task card. Logs stream in real time.
 
@@ -141,7 +132,7 @@ Hit ▶ **Start** on the task card. Logs stream in real time.
 
 ## ⚙️ Configuration
 
-Tasks are stored in `tasks.yaml` in the daemon's working directory:
+Tasks are stored in `tasks.yaml` in the working directory (repo root in dev, next to the binary in production):
 
 ```yaml
 tasks:
@@ -162,13 +153,13 @@ tasks:
 App settings are in `settings.yaml`:
 
 ```yaml
-settings:
-  theme: "dark"              # "dark" | "light"
-  daemon_port: 27015
-  log_buffer_lines: 5000
-  notifications_enabled: true
-  auto_check_updates: true
+theme: "dark"              # "dark" | "light"
+log_buffer_lines: 5000
+notifications_enabled: true
+auto_check_updates: true
 ```
+
+> **Data directory:** set `LABALABA_DATA_DIR` to override where `tasks.yaml`, `settings.yaml`, and `logs/` are stored.
 
 ---
 
@@ -177,8 +168,8 @@ settings:
 | Layer | Technology |
 |---|---|
 | **GUI** | [Tauri 2](https://tauri.app/) + [SvelteKit 5](https://svelte.dev/) + TypeScript |
-| **Daemon** | Rust + [axum](https://github.com/tokio-rs/axum) + [tokio](https://tokio.rs/) |
-| **IPC** | HTTP REST + WebSocket (localhost) |
+| **Backend** | Rust + [tokio](https://tokio.rs/) — embedded in the Tauri process |
+| **IPC** | Tauri commands (`invoke`) + Tauri events (`listen`) |
 | **Persistence** | YAML (`serde_yaml`) |
 | **Scheduling** | Cron expressions (`cron` crate) |
 | **Styling** | Glassmorphism CSS with CSS custom properties |
@@ -223,16 +214,16 @@ git push origin feat/my-feature
 ```
 labalaba/
 ├── crates/
-│   ├── daemon/        # Background process manager (Rust, DDD)
+│   ├── daemon/        # Process manager logic (Rust, DDD) — lib + standalone bin
 │   └── shared/        # Shared types (DTOs, API models)
 ├── gui/
 │   ├── src/           # SvelteKit frontend
 │   │   ├── lib/
-│   │   │   ├── api/         # HTTP + WebSocket clients
+│   │   │   ├── api/         # Tauri invoke/listen clients
 │   │   │   ├── components/  # UI components
 │   │   │   └── stores/      # Svelte stores (tasks, theme, settings)
 │   │   └── styles/    # Glassmorphism + theme CSS
-│   └── src-tauri/     # Tauri Rust backend (thin proxy)
+│   └── src-tauri/     # Tauri app — embeds daemon logic + Tauri commands
 └── docs/              # Design documents & assets
 ```
 

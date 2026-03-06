@@ -2,6 +2,8 @@
 
 .DEFAULT_GOAL := help
 
+VERSION := $(shell node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync('gui/src-tauri/tauri.conf.json')).version)")
+
 # - Dev ---------------------------------
 
 dev: ## Start Tauri app (daemon + GUI with hot-reload)
@@ -10,9 +12,11 @@ dev: ## Start Tauri app (daemon + GUI with hot-reload)
 stop: ## Kill all dev processes (daemon + Tauri)
 	@powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
 
-build: ## Build frontend and backend (release)
-	cd gui && npm run build
-	cargo build -p labalaba-daemon --release
+build: ## Build Tauri app release bundle → labalaba-v$(VERSION).exe
+	cd gui && npm run tauri build
+	@mkdir -p dist
+	cp gui/src-tauri/target/release/labalaba-gui.exe dist/labalaba-v$(VERSION).exe
+	@echo "Output: dist/labalaba-v$(VERSION).exe"
 
 build-be: ## Build backend only (release)
 	cargo build -p labalaba-daemon --release

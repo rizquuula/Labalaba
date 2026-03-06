@@ -1,8 +1,12 @@
 <script lang="ts">
+  import { getVersion } from '@tauri-apps/api/app';
   import { theme } from '$lib/stores/theme';
   import { stats } from '$lib/stores/tasks';
 
   let { onSettingsClick } = $props<{ onSettingsClick: () => void }>();
+
+  let appVersion = $state('');
+  getVersion().then(v => appVersion = v);
 
   function sunIcon() {
     return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -24,8 +28,8 @@
 <header class="topbar glass">
   <!-- Branding -->
   <div class="brand">
-    <span class="brand-icon">⬡</span>
-    <span class="brand-name">Labalaba</span>
+    <img src="/logo.jpg" alt="Labalaba" class="brand-logo" />
+    <span class="brand-name">Labalaba <span class="brand-version">v{appVersion}</span></span>
   </div>
 
   <!-- Stats summary -->
@@ -96,10 +100,11 @@
     flex-shrink: 0;
   }
 
-  .brand-icon {
-    font-size: 1.25rem;
-    color: var(--accent);
-    line-height: 1;
+  .brand-logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
   }
 
   .brand-name {
@@ -107,6 +112,13 @@
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--text-primary);
+  }
+
+  .brand-version {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-muted);
+    letter-spacing: 0;
   }
 
   .stats-row {

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/logo.png" alt="Labalaba Logo" width="96" height="96" />
+<img src="assets/labalaba-logo.jpg" alt="Labalaba Logo" width="96" height="96" />
 
 # Labalaba
 

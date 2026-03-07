@@ -6,7 +6,8 @@
 
 **A modern, cross-platform process manager with a glassmorphism UI**
 
-[![Build](https://img.shields.io/github/actions/workflow/status/rizquuula/labalaba/ci.yml?style=flat-square&logo=github)](https://github.com/rizquuula/labalaba/actions)
+[![Build](https://img.shields.io/github/actions/workflow/status/rizquuula/labalaba/build.yml?label=build&style=flat-square&logo=github)](https://github.com/rizquuula/labalaba/actions/workflows/build.yml)
+[![Test](https://img.shields.io/github/actions/workflow/status/rizquuula/labalaba/test.yml?label=test&style=flat-square&logo=github)](https://github.com/rizquuula/labalaba/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/rizquuula/labalaba?style=flat-square&color=blue)](https://github.com/rizquuula/labalaba/releases)
 [![License](https://img.shields.io/github/license/rizquuula/labalaba?style=flat-square)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/rizquuula/labalaba?style=flat-square&color=yellow)](https://github.com/rizquuula/labalaba/stargazers)

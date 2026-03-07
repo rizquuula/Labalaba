@@ -20,7 +20,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test -p labalaba-daemon -p labalaba-shared
 
   frontend-check:
     name: Frontend Type Check

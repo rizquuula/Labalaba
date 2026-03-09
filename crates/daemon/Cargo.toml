@@ -30,6 +30,7 @@ tokio-stream = "0.1"
 futures-util = "0.3"
 async-trait = "0.1"
 cron = "0.12"
+sysinfo = "0.29"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

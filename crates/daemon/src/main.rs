@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let state = init_app_state(None).await?;
+    let state = init_app_state(None, None).await?;
     let port = state.settings.read().await.daemon_port;
 
     let app = router::build(Arc::clone(&state));

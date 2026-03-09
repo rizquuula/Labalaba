@@ -76,6 +76,8 @@ pub struct TaskDto {
     pub pids: Vec<u32>,
     pub started_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
+    pub cpu_percent: Option<f32>,
+    pub memory_bytes: Option<u64>,
 }
 
 /// Payload for creating or updating a task

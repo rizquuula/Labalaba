@@ -6,7 +6,7 @@ pub mod interface;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
-use labalaba_shared::api::{AppSettings, LogEntry};
+use labalaba_shared::api::{AppSettings, LogEntry, UpdateInfo};
 use labalaba_shared::task::TaskId;
 use infrastructure::{
     persistence::yaml_repository::YamlTaskRepository,
@@ -16,6 +16,7 @@ use infrastructure::{
     log::file_writer::LogFileWriter,
 };
 use application::task::start_task::StartTask;
+use application::update::check_update::CheckUpdate;
 
 /// Base directory for all data files (tasks.yaml, settings.yaml, logs/).
 /// Reads `LABALABA_DATA_DIR` env var; falls back to the current working directory.
@@ -54,26 +55,31 @@ pub fn is_process_running(pid: u32) -> bool {
 }
 
 /// Load settings from `{data_dir}/settings.yaml`, falling back to defaults.
-pub async fn load_settings() -> AppSettings {
-    let path = data_dir().join("settings.yaml");
-    if path.exists() {
-        if let Ok(contents) = tokio::fs::read_to_string(&path).await {
+pub async fn load_settings() -> (AppSettings, String) {
+    let base = data_dir();
+    let settings_path = base.join("settings.yaml");
+    let settings_path_str = settings_path.to_string_lossy().to_string();
+    
+    if settings_path.exists() {
+        if let Ok(contents) = tokio::fs::read_to_string(&settings_path).await {
             if let Ok(s) = serde_yaml::from_str::<AppSettings>(&contents) {
-                return s;
+                return (s, settings_path_str);
             }
         }
     }
-    AppSettings::default()
+    (AppSettings::default(), settings_path_str)
 }
 
 /// Initialize the full daemon AppState, recover task states, and spawn the restart loop.
 ///
 /// `log_event_callback` — when `Some`, called for every log line produced by managed tasks.
 /// Pass `None` for the standalone daemon (which streams via WebSocket instead).
+/// `update_event_callback` — when `Some`, called when an update is available.
 pub async fn init_app_state(
     log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
+    update_event_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
 ) -> anyhow::Result<Arc<AppState>> {
-    let settings = load_settings().await;
+    let (settings, settings_path) = load_settings().await;
 
     let (restart_tx, restart_rx) = mpsc::channel::<TaskId>(64);
 
@@ -89,10 +95,23 @@ pub async fn init_app_state(
     let repo = Arc::new(YamlTaskRepository::new(config_path));
     let spawner = Arc::new(OsProcessSpawner);
     let updater = Arc::new(GithubUpdater::new());
-    let state = AppState::new(repo, spawner, updater, settings, restart_tx, log_writer, log_event_callback);
+    let state = AppState::new(repo, spawner, updater, settings.clone(), settings_path.clone(), restart_tx, log_writer, log_event_callback, update_event_callback);
+
+    // Save settings to file if it doesn't exist
+    if !std::path::Path::new(&settings_path).exists() {
+        if let Err(e) = state.save_settings().await {
+            tracing::warn!("Failed to save initial settings: {}", e);
+        }
+    }
 
     recover_task_states(Arc::clone(&state)).await;
     tokio::spawn(restart_loop(restart_rx, Arc::clone(&state)));
+
+    // Auto-check for updates if enabled
+    if settings.auto_check_updates {
+        let callback = state.update_event_callback.clone();
+        spawn_update_checker(Arc::clone(&state), callback);
+    }
 
     Ok(state)
 }
@@ -144,4 +163,33 @@ pub async fn recover_task_states(state: Arc<AppState>) {
             tracing::warn!("Failed to load tasks for recovery: {}", e);
         }
     }
+}
+
+/// Spawn a background task to check for updates and emit event if available.
+fn spawn_update_checker(
+    state: Arc<AppState>,
+    update_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
+) {
+    tokio::spawn(async move {
+        let uc = CheckUpdate { state };
+        match uc.execute().await {
+            Ok(info) => {
+                if info.available {
+                    tracing::info!(
+                        "Update available: {} (current: {})",
+                        info.latest_version.as_ref().unwrap_or(&"unknown".to_string()),
+                        info.current_version
+                    );
+                    if let Some(cb) = &update_callback {
+                        cb(info);
+                    }
+                } else {
+                    tracing::debug!("No update available (current: {})", info.current_version);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to check for updates: {}", e);
+            }
+        }
+    });
 }

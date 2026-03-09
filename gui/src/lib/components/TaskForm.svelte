@@ -60,6 +60,17 @@
     }
   }
 
+  async function pickWorkingDir() {
+    const selected = await open({
+      multiple: false,
+      directory: true,
+      title: 'Select Working Directory',
+    });
+    if (selected && typeof selected === 'string') {
+      workingDir = selected;
+    }
+  }
+
   async function handleSubmit(e: Event) {
     e.preventDefault();
     if (!name.trim() || !executable.trim()) {
@@ -156,8 +167,13 @@
         <div class="form-grid">
           <div class="form-group full">
             <label for="task-wd">Working Directory</label>
-            <input id="task-wd" class="input" type="text" bind:value={workingDir}
-              placeholder="C:\path\to\workdir (optional)" />
+            <div class="input-row">
+              <input id="task-wd" class="input" type="text" bind:value={workingDir}
+                placeholder="C:\path\to\workdir" />
+              <button type="button" class="btn btn-secondary" onclick={pickWorkingDir}>
+                Browse
+              </button>
+            </div>
           </div>
 
           <div class="form-group full">

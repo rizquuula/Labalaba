@@ -3,7 +3,7 @@ mod commands;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use labalaba_daemon::init_app_state;
-use labalaba_shared::api::LogEntry;
+use labalaba_shared::api::{LogEntry, UpdateInfo};
 use commands::{
     tasks::{list_tasks, get_task, create_task, update_task, delete_task,
             start_task, stop_task, restart_task, get_stats},
@@ -26,7 +26,13 @@ pub fn run() {
                     app_handle.emit(&event, &entry).ok();
                 });
 
-            let state = tauri::async_runtime::block_on(init_app_state(Some(log_cb)))
+            // Wire update events → Tauri events for update popup
+            let update_cb: Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static> =
+                Arc::new(move |info: UpdateInfo| {
+                    app_handle.emit("update-available", &info).ok();
+                });
+
+            let state = tauri::async_runtime::block_on(init_app_state(Some(log_cb), Some(update_cb)))
                 .expect("Failed to initialize daemon state");
 
             app.manage(state);

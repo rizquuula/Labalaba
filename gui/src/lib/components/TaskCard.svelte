@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type TaskDto, taskId } from '$lib/api/client';
   import { loadTasks } from '$lib/stores/tasks';
+  import ConfirmDialog from './ConfirmDialog.svelte';
 
   let { task, onViewLogs, onEdit } = $props<{
     task: TaskDto;
@@ -10,6 +11,7 @@
 
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let confirmAction = $state<{ type: 'stop' | 'restart' } | null>(null);
 
   const id = $derived(taskId(task));
   const isRunning = $derived(task.status === 'running' || task.status === 'starting');
@@ -31,6 +33,16 @@
     if (!confirm(`Delete task "${task.config.description}"?`)) return;
     await action(() => api.tasks.remove(id));
   }
+
+  async function handleStop() {
+    await action(() => api.tasks.stop(id));
+    confirmAction = null;
+  }
+
+  async function handleRestart() {
+    await action(() => api.tasks.restart(id));
+    confirmAction = null;
+  }
 </script>
 
 <div class="task-card glass card" class:running={isRunning} class:crashed={task.status === 'crashed'}>
@@ -43,10 +55,10 @@
     <div class="card-actions">
       <!-- Start / Stop / Restart -->
       {#if isRunning}
-        <button class="btn" onclick={() => action(() => api.tasks.stop(id))} disabled={loading}>
+        <button class="btn" onclick={() => confirmAction = { type: 'stop' }} disabled={loading}>
           ⏹ Stop
         </button>
-        <button class="btn" onclick={() => action(() => api.tasks.restart(id))} disabled={loading}>
+        <button class="btn" onclick={() => confirmAction = { type: 'restart' }} disabled={loading}>
           ↺ Restart
         </button>
       {:else}
@@ -94,6 +106,19 @@
 
   {#if error}
     <p class="card-error">{error}</p>
+  {/if}
+
+  {#if confirmAction}
+    <ConfirmDialog
+      title={confirmAction.type === 'stop' ? 'Stop Task' : 'Restart Task'}
+      message={confirmAction.type === 'stop' 
+        ? `Stop running task "${task.config.description}"?`
+        : `Restart task "${task.config.description}"? This will stop and start it again.`}
+      confirmText={confirmAction.type === 'stop' ? 'Stop' : 'Restart'}
+      variant={confirmAction.type === 'stop' ? 'warning' : 'danger'}
+      onConfirm={confirmAction.type === 'stop' ? handleStop : handleRestart}
+      onCancel={() => confirmAction = null}
+    />
   {/if}
 </div>
 

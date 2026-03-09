@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const GITHUB_API: &str = "https://api.github.com/repos/YOUR_ORG/labalaba/releases/latest";
+const GITHUB_API: &str = "https://api.github.com/repos/rizquuula/Labalaba/releases/latest";
 
 #[derive(Deserialize)]
 struct GithubRelease {

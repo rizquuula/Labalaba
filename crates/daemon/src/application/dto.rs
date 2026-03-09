@@ -1,9 +1,24 @@
 use crate::domain::task::entity::Task;
 use crate::domain::task::status::TaskRuntimeState;
+use crate::infrastructure::state::AppState;
 use labalaba_shared::task::{TaskConfig, TaskDto};
 
 /// Convert domain Task + runtime state into the DTO sent over HTTP
-pub fn task_to_dto(task: &Task, state: &TaskRuntimeState) -> TaskDto {
+pub async fn task_to_dto(
+    task: &Task, 
+    state: &TaskRuntimeState,
+    app_state: &AppState,
+) -> TaskDto {
+    let (cpu_percent, memory_bytes) = if let Some(pid) = state.pid {
+        if let Some(usage) = app_state.resource_monitor.get_usage(&task.id).await {
+            usage
+        } else {
+            (0.0, 0)
+        }
+    } else {
+        (0.0, 0)
+    };
+
     TaskDto {
         config: task_to_config(task),
         status: state.status.clone(),
@@ -11,6 +26,8 @@ pub fn task_to_dto(task: &Task, state: &TaskRuntimeState) -> TaskDto {
         pids: task.pids.clone(),
         started_at: state.started_at,
         exit_code: state.exit_code,
+        cpu_percent: Some(cpu_percent),
+        memory_bytes: Some(memory_bytes),
     }
 }
 

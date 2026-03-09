@@ -15,7 +15,19 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Json(new_settings): Json<AppSettings>,
 ) -> Resp<AppSettings> {
-    let mut settings = state.settings.write().await;
-    *settings = new_settings.clone();
+    // Update in-memory settings
+    {
+        let mut settings = state.settings.write().await;
+        *settings = new_settings.clone();
+    }
+    
+    // Persist to YAML file
+    if let Err(e) = state.save_settings().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::err(format!("Failed to save settings: {}", e)))
+        );
+    }
+    
     (StatusCode::OK, Json(ApiResponse::ok(new_settings)))
 }

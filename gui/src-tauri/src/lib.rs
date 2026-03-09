@@ -20,16 +20,18 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             // Wire log entries → Tauri events so the frontend can listen("log:{task_id}", cb)
+            let log_app_handle = app_handle.clone();
             let log_cb: Arc<dyn Fn(LogEntry) + Send + Sync + 'static> =
                 Arc::new(move |entry: LogEntry| {
                     let event = format!("log:{}", entry.task_id);
-                    app_handle.emit(&event, &entry).ok();
+                    log_app_handle.emit(&event, &entry).ok();
                 });
 
             // Wire update events → Tauri events for update popup
+            let update_app_handle = app_handle.clone();
             let update_cb: Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static> =
                 Arc::new(move |info: UpdateInfo| {
-                    app_handle.emit("update-available", &info).ok();
+                    update_app_handle.emit("update-available", &info).ok();
                 });
 
             let state = tauri::async_runtime::block_on(init_app_state(Some(log_cb), Some(update_cb)))

@@ -22,9 +22,11 @@ pub async fn list_tasks(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Ta
     let tasks = state.task_repo.find_all().await.map_err(|e| e.to_string())?;
     let states = state.runtime_states.read().await;
     let default_rt = TaskRuntimeState::default();
-    let dtos = tasks.iter()
-        .map(|t| task_to_dto(t, states.get(&t.id).unwrap_or(&default_rt)))
-        .collect();
+    let mut dtos = Vec::new();
+    for t in &tasks {
+        let dto = task_to_dto(t, states.get(&t.id).unwrap_or(&default_rt), &state).await;
+        dtos.push(dto);
+    }
     Ok(dtos)
 }
 
@@ -39,7 +41,7 @@ pub async fn get_task(state: tauri::State<'_, Arc<AppState>>, id: String) -> Res
     let states = state.runtime_states.read().await;
     let default_rt = TaskRuntimeState::default();
     let rt = states.get(&task_id).unwrap_or(&default_rt);
-    Ok(task_to_dto(&task, rt))
+    Ok(task_to_dto(&task, rt, &state).await)
 }
 
 #[tauri::command]
@@ -47,7 +49,7 @@ pub async fn create_task(state: tauri::State<'_, Arc<AppState>>, req: TaskReques
     let state = Arc::clone(&*state);
     let uc = CreateTask { repo: Arc::clone(&state.task_repo) };
     let task = uc.execute(req).await.map_err(|e| e.to_string())?;
-    Ok(task_to_dto(&task, &TaskRuntimeState::default()))
+    Ok(task_to_dto(&task, &TaskRuntimeState::default(), &state).await)
 }
 
 #[tauri::command]
@@ -60,7 +62,7 @@ pub async fn update_task(state: tauri::State<'_, Arc<AppState>>, id: String, req
     let states = state.runtime_states.read().await;
     let default_rt = TaskRuntimeState::default();
     let rt = states.get(&task_id).unwrap_or(&default_rt);
-    Ok(task_to_dto(&task, rt))
+    Ok(task_to_dto(&task, rt, &state).await)
 }
 
 #[tauri::command]

@@ -14,6 +14,12 @@ async fn main() -> anyhow::Result<()> {
     let state = init_app_state(None, None).await?;
     let port = state.settings.read().await.daemon_port;
 
+    // Start resource monitor background refresh (5s interval)
+    let resource_monitor = Arc::clone(&state.resource_monitor);
+    tokio::spawn(async move {
+        resource_monitor.start_background_refresh(5).await;
+    });
+
     let app = router::build(Arc::clone(&state));
     let addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;

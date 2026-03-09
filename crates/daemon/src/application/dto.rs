@@ -9,7 +9,7 @@ pub async fn task_to_dto(
     state: &TaskRuntimeState,
     app_state: &AppState,
 ) -> TaskDto {
-    let (cpu_percent, memory_bytes) = if let Some(pid) = state.pid {
+    let (cpu_percent, memory_bytes) = if state.pid.is_some() {
         if let Some(usage) = app_state.resource_monitor.get_usage(&task.id).await {
             usage
         } else {
@@ -29,6 +29,13 @@ pub async fn task_to_dto(
         cpu_percent: Some(cpu_percent),
         memory_bytes: Some(memory_bytes),
     }
+}
+
+/// Resource stats for a task
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TaskResourceStats {
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
 }
 
 /// Convert domain Task into its config representation

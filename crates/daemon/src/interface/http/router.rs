@@ -22,6 +22,8 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/api/tasks/{id}/start", routing::post(tasks::start))
         .route("/api/tasks/{id}/stop", routing::post(tasks::stop))
         .route("/api/tasks/{id}/restart", routing::post(tasks::restart))
+        // Task resource stats
+        .route("/api/tasks/{id}/stats", routing::get(tasks::get_task_stats))
         // Stats
         .route("/api/stats", routing::get(tasks::stats))
         // Settings

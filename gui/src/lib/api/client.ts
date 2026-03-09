@@ -22,6 +22,8 @@ export interface TaskDto {
   pid?: number;
   started_at?: string;
   exit_code?: number;
+  cpu_percent?: number;
+  memory_bytes?: number;
 }
 
 export interface TaskStats {
@@ -29,6 +31,11 @@ export interface TaskStats {
   running: number;
   stopped: number;
   crashed: number;
+}
+
+export interface TaskResourceStats {
+  cpu_percent: number;
+  memory_bytes: number;
 }
 
 export interface AppSettings {
@@ -73,6 +80,7 @@ export const api = {
     start: (id: string) => invoke<number>('start_task', { id }),
     stop: (id: string) => invoke<void>('stop_task', { id }),
     restart: (id: string) => invoke<number>('restart_task', { id }),
+    getStats: (id: string) => invoke<TaskResourceStats>('get_task_stats', { id }),
   },
   stats: () => invoke<TaskStats>('get_stats'),
   settings: {

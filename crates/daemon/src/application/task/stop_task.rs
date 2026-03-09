@@ -36,6 +36,9 @@ impl StopTask {
         task.pids.clear();
         self.state.task_repo.save(&task).await?;
 
+        // Unregister from resource monitor
+        self.state.resource_monitor.unregister_task(&id).await;
+
         {
             let mut states = self.state.runtime_states.write().await;
             if let Some(s) = states.get_mut(&id) {

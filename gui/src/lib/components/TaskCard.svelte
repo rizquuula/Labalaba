@@ -12,6 +12,8 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let confirmAction = $state<{ type: 'stop' | 'restart' } | null>(null);
+  let cpuUsage = $state<number | null>(null);
+  let memUsage = $state<number | null>(null);
 
   const id = $derived(taskId(task));
   const isRunning = $derived(task.status === 'running' || task.status === 'starting');
@@ -42,6 +44,34 @@
   async function handleRestart() {
     await action(() => api.tasks.restart(id));
     confirmAction = null;
+  }
+
+  async function updateMetrics() {
+    if (isRunning && task.pid) {
+      try {
+        const stats = await api.tasks.getStats(id);
+        cpuUsage = stats.cpu_percent;
+        memUsage = stats.memory_bytes;
+      } catch (e) {
+        // Ignore errors
+      }
+    }
+  }
+
+  $effect(() => {
+    if (isRunning) {
+      updateMetrics();
+      const interval = setInterval(updateMetrics, 5000);
+      return () => clearInterval(interval);
+    }
+  });
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 </script>
 
@@ -95,6 +125,14 @@
     </span>
     {#if task.pid}
       <span class="meta-item">PID <strong>{task.pid}</strong></span>
+    {/if}
+    {#if cpuUsage !== null && task.pid}
+      <span class="meta-item">
+        CPU: <strong>{cpuUsage.toFixed(1)}%</strong>
+      </span>
+      <span class="meta-item">
+        Memory: <strong>{formatBytes(memUsage ?? 0)}</strong>
+      </span>
     {/if}
     {#if task.config.run_as_admin}
       <span class="meta-tag admin">Admin</span>

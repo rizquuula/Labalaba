@@ -56,6 +56,9 @@ impl StartTask {
             task
         };
 
+        // Register with resource monitor
+        self.state.resource_monitor.register_task(id.clone(), pid).await;
+
         // Ensure a log channel exists for this task
         let broadcaster = {
             let mut logs = self.state.log_channels.write().await;

@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use labalaba_shared::api::ApiResponse;
 use labalaba_shared::task::{TaskDto, TaskId, TaskRequest, TaskStats};
 use uuid::Uuid;
-use crate::application::dto::task_to_dto;
+use crate::application::dto::{task_to_dto, TaskResourceStats};
 use crate::application::task::{
     create_task::CreateTask, delete_task::DeleteTask, edit_task::EditTask,
     restart_task::RestartTask, start_task::StartTask, stop_task::StopTask,
@@ -27,10 +27,11 @@ pub async fn list(State(state): State<Arc<AppState>>) -> Resp<Vec<TaskDto>> {
     match state.task_repo.find_all().await {
         Ok(tasks) => {
             let states = state.runtime_states.read().await;
-            let dtos = tasks.iter().map(|t| {
+            let mut dtos = Vec::new();
+            for t in &tasks {
                 let rt = states.get(&t.id).cloned().unwrap_or_default();
-                task_to_dto(t, &rt)
-            }).collect();
+                dtos.push(task_to_dto(t, &rt, &state).await);
+            }
             ok(dtos)
         }
         Err(e) => err(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
@@ -49,7 +50,7 @@ pub async fn get_one(
         Ok(Some(task)) => {
             let states = state.runtime_states.read().await;
             let rt = states.get(&id).cloned().unwrap_or_default();
-            ok(task_to_dto(&task, &rt))
+            ok(task_to_dto(&task, &rt, &state).await)
         }
         Ok(None) => err("Task not found", StatusCode::NOT_FOUND),
         Err(e) => err(e.to_string(), StatusCode::INTERNAL_SERVER_ERROR),
@@ -64,7 +65,7 @@ pub async fn create(
     match uc.execute(req).await {
         Ok(task) => {
             let rt = TaskRuntimeState::default();
-            ok(task_to_dto(&task, &rt))
+            ok(task_to_dto(&task, &rt, &state).await)
         }
         Err(e) => err(e.to_string(), StatusCode::BAD_REQUEST),
     }
@@ -84,7 +85,7 @@ pub async fn update(
         Ok(task) => {
             let states = state.runtime_states.read().await;
             let rt = states.get(&id).cloned().unwrap_or_default();
-            ok(task_to_dto(&task, &rt))
+            ok(task_to_dto(&task, &rt, &state).await)
         }
         Err(e) => err(e.to_string(), StatusCode::BAD_REQUEST),
     }
@@ -164,4 +165,26 @@ pub async fn stats(State(state): State<Arc<AppState>>) -> Resp<TaskStats> {
         ))
         .count();
     ok(TaskStats { total, running, stopped: total - running - crashed, crashed })
+}
+
+pub async fn get_task_stats(
+    State(state): State<Arc<AppState>>,
+    Path(id_str): Path<String>,
+) -> Resp<TaskResourceStats> {
+    let Ok(uuid) = Uuid::parse_str(&id_str) else {
+        return err("Invalid task ID", StatusCode::BAD_REQUEST);
+    };
+    let id = TaskId(uuid);
+    
+    let usage = state.resource_monitor.get_usage(&id).await;
+    
+    match usage {
+        Some((cpu_percent, memory_bytes)) => {
+            ok(TaskResourceStats {
+                cpu_percent,
+                memory_bytes,
+            })
+        }
+        None => err("Task not found or not running", StatusCode::NOT_FOUND),
+    }
 }

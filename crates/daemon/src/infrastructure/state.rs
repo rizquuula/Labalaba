@@ -5,7 +5,8 @@ use crate::domain::task::status::TaskRuntimeState;
 use crate::infrastructure::log::file_writer::LogFileWriter;
 use crate::infrastructure::process::resource_monitor::ResourceMonitor;
 use crate::infrastructure::updater::github_updater::GithubUpdater;
-use labalaba_shared::api::{AppSettings, LogEntry, UpdateInfo};
+use labalaba_shared::api::{LogEntry, UpdateInfo};
+use labalaba_shared::settings::AppSettings;
 use labalaba_shared::task::TaskId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,7 +68,7 @@ impl AppState {
     }
 
     pub async fn save_settings(&self) -> anyhow::Result<()> {
-        let settings = self.settings.read().await;
+        let settings = self.settings.read().await.clone();
         settings.save_to_file(&self.settings_path)?;
         Ok(())
     }

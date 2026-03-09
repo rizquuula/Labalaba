@@ -21,7 +21,7 @@ impl ResourceMonitor {
 
     pub async fn register_task(&self, task_id: TaskId, pid: u32) {
         let mut tasks = self.monitored_tasks.write().await;
-        tasks.insert(task_id, pid);
+        tasks.insert(task_id.clone(), pid);
         tracing::debug!("Registered task {} for resource monitoring (PID {})", task_id, pid);
     }
 
@@ -34,12 +34,12 @@ impl ResourceMonitor {
 
     pub async fn get_usage(&self, task_id: &TaskId) -> Option<(f32, u64)> {
         let tasks = self.monitored_tasks.read().await;
-        let pid = tasks.get(task_id)?;
+        let pid = *tasks.get(task_id)? as usize;
         
         let mut sys = self.system.write().await;
-        sys.refresh_process((*pid).into());
+        sys.refresh_process(pid.into());
         
-        if let Some(process) = sys.process((*pid).into()) {
+        if let Some(process) = sys.process(pid.into()) {
             Some((process.cpu_usage(), process.memory()))
         } else {
             None
@@ -53,7 +53,8 @@ impl ResourceMonitor {
         
         let mut result = HashMap::new();
         for (task_id, pid) in tasks.iter() {
-            if let Some(process) = sys.process((*pid).into()) {
+            let pid_usize = *pid as usize;
+            if let Some(process) = sys.process(pid_usize.into()) {
                 result.insert(task_id.clone(), (process.cpu_usage(), process.memory()));
             }
         }

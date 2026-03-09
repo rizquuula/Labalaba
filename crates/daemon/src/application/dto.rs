@@ -77,6 +77,7 @@ pub fn config_to_task(config: TaskConfig) -> Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::task::entity::TaskId;
     use std::collections::HashMap;
 
     fn create_test_task() -> Task {

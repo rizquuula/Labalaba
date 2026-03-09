@@ -34,3 +34,7 @@ sysinfo = "0.29"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+mockall = "0.12"
+tempfile = "3"

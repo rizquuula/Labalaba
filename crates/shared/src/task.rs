@@ -111,3 +111,101 @@ pub struct TaskStats {
     pub stopped: usize,
     pub crashed: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_task_id_generation() {
+        let id1 = TaskId::new();
+        let id2 = TaskId::new();
+
+        assert_ne!(id1, id2); // UUIDs should be unique
+    }
+
+    #[test]
+    fn test_task_id_default() {
+        let id = TaskId::default();
+        assert!(id.0.as_u128() != 0); // Should be a valid UUID
+    }
+
+    #[test]
+    fn test_task_id_display() {
+        let id = TaskId::new();
+        let display = id.to_string();
+
+        // UUID format: 8-4-4-4-12 hex characters with hyphens
+        assert_eq!(display.len(), 36);
+        assert_eq!(display.chars().filter(|c| *c == '-').count(), 4);
+    }
+
+    #[test]
+    fn test_task_status_serialization() {
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Stopped).unwrap(),
+            "\"stopped\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Starting).unwrap(),
+            "\"starting\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Running).unwrap(),
+            "\"running\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Stopping).unwrap(),
+            "\"stopping\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Crashed).unwrap(),
+            "\"crashed\""
+        );
+    }
+
+    #[test]
+    fn test_task_status_deserialization() {
+        assert_eq!(
+            serde_json::from_str::<TaskStatus>("\"stopped\"").unwrap(),
+            TaskStatus::Stopped
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskStatus>("\"starting\"").unwrap(),
+            TaskStatus::Starting
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskStatus>("\"running\"").unwrap(),
+            TaskStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_task_stats_default() {
+        let stats = TaskStats {
+            total: 5,
+            running: 2,
+            stopped: 2,
+            crashed: 1,
+        };
+
+        assert_eq!(stats.total, 5);
+        assert_eq!(stats.running, 2);
+        assert_eq!(stats.stopped, 2);
+        assert_eq!(stats.crashed, 1);
+    }
+
+    #[test]
+    fn test_task_stats_serialization() {
+        let stats = TaskStats {
+            total: 3,
+            running: 1,
+            stopped: 1,
+            crashed: 1,
+        };
+
+        let json = serde_json::to_string(&stats).unwrap();
+        assert!(json.contains("\"total\":3"));
+        assert!(json.contains("\"running\":1"));
+    }
+}

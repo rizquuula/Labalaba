@@ -174,6 +174,11 @@
     border-color: var(--border-accent);
   }
 
+  .filter-select option {
+    background: var(--bg-base);
+    color: var(--text-primary);
+  }
+
   .empty-state {
     display: flex;
     flex-direction: column;

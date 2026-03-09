@@ -1,7 +1,7 @@
 use crate::domain::task::entity::Task;
 use crate::domain::task::status::TaskRuntimeState;
 use crate::infrastructure::state::AppState;
-use labalaba_shared::task::{TaskConfig, TaskDto, TaskId};
+use labalaba_shared::task::{TaskConfig, TaskDto};
 
 /// Convert domain Task + runtime state into the DTO sent over HTTP
 pub async fn task_to_dto(

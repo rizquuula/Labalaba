@@ -70,6 +70,7 @@ export interface TaskRequest {
   startup_delay_ms: number;
   depends_on?: string[];
   runner_prefix?: string;
+  pids?: number[];
 }
 
 export const api = {

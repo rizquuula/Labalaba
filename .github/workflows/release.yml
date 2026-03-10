@@ -42,6 +42,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set version from release tag
+        shell: bash
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "Setting version to $VERSION"
+          # Update tauri.conf.json
+          cd gui/src-tauri
+          sed -i'' -e "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" tauri.conf.json
+          cat tauri.conf.json | grep version
+          cd ../..
+          # Update gui/package.json
+          cd gui
+          sed -i'' -e "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" package.json
+          cd ..
+          # Update Cargo.toml versions for gui and workspace crates
+          sed -i'' -e "0,/^version = \"[^\"]*\"/s/^version = \"[^\"]*\"/version = \"$VERSION\"/" gui/src-tauri/Cargo.toml
+          sed -i'' -e "0,/^version = \"[^\"]*\"/s/^version = \"[^\"]*\"/version = \"$VERSION\"/" crates/shared/Cargo.toml
+          sed -i'' -e "0,/^version = \"[^\"]*\"/s/^version = \"[^\"]*\"/version = \"$VERSION\"/" crates/daemon/Cargo.toml
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

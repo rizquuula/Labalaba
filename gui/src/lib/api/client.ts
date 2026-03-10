@@ -13,6 +13,7 @@ export interface TaskConfig {
   schedule?: { cron: string };
   startup_delay_ms: number;
   depends_on: string[];
+  runner_prefix?: string;
   pids: number[];
 }
 
@@ -68,6 +69,7 @@ export interface TaskRequest {
   schedule?: { cron: string };
   startup_delay_ms: number;
   depends_on?: string[];
+  runner_prefix?: string;
 }
 
 export const api = {

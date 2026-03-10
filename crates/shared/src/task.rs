@@ -64,6 +64,8 @@ pub struct TaskConfig {
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
     #[serde(default)]
+    pub runner_prefix: Option<String>,
+    #[serde(default)]
     pub pids: Vec<u32>,
 }
 
@@ -99,6 +101,8 @@ pub struct TaskRequest {
     pub startup_delay_ms: u64,
     #[serde(default)]
     pub depends_on: Vec<TaskId>,
+    #[serde(default)]
+    pub runner_prefix: Option<String>,
     #[serde(default)]
     pub pids: Vec<u32>,
 }

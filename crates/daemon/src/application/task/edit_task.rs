@@ -24,6 +24,7 @@ impl EditTask {
             schedule: req.schedule,
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on,
+            runner_prefix: req.runner_prefix,
             pids: existing.pids, // Preserve existing PIDs during edit
         };
         updated.validate()?;

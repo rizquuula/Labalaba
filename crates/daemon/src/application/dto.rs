@@ -52,6 +52,7 @@ pub fn task_to_config(task: &Task) -> TaskConfig {
         schedule: task.schedule.clone(),
         startup_delay_ms: task.startup_delay_ms,
         depends_on: task.depends_on.clone(),
+        runner_prefix: task.runner_prefix.clone(),
         pids: task.pids.clone(),
     }
 }
@@ -70,6 +71,7 @@ pub fn config_to_task(config: TaskConfig) -> Task {
         schedule: config.schedule,
         startup_delay_ms: config.startup_delay_ms,
         depends_on: config.depends_on,
+        runner_prefix: config.runner_prefix,
         pids: config.pids,
     }
 }
@@ -96,6 +98,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 1000,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![1234],
         }
     }
@@ -115,6 +118,7 @@ mod tests {
         assert_eq!(config.auto_restart, task.auto_restart);
         assert_eq!(config.startup_delay_ms, task.startup_delay_ms);
         assert_eq!(config.depends_on, task.depends_on);
+        assert_eq!(config.runner_prefix, task.runner_prefix);
         assert_eq!(config.pids, task.pids);
     }
 
@@ -134,6 +138,7 @@ mod tests {
         assert_eq!(reconstructed.auto_restart, task.auto_restart);
         assert_eq!(reconstructed.startup_delay_ms, task.startup_delay_ms);
         assert_eq!(reconstructed.depends_on, task.depends_on);
+        assert_eq!(reconstructed.runner_prefix, task.runner_prefix);
         assert_eq!(reconstructed.pids, task.pids);
     }
 
@@ -155,6 +160,7 @@ mod tests {
         // Skip schedule comparison - doesn't implement PartialEq
         assert_eq!(original_task.startup_delay_ms, reconstructed.startup_delay_ms);
         assert_eq!(original_task.depends_on, reconstructed.depends_on);
+        assert_eq!(original_task.runner_prefix, reconstructed.runner_prefix);
         assert_eq!(original_task.pids, reconstructed.pids);
     }
 
@@ -172,6 +178,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 0,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         };
         
@@ -185,6 +192,7 @@ mod tests {
         assert!(task.schedule.is_none());
         assert_eq!(task.startup_delay_ms, 0);
         assert!(task.depends_on.is_empty());
+        assert!(task.runner_prefix.is_none());
         assert!(task.pids.is_empty());
     }
 }

@@ -15,6 +15,7 @@ pub struct Task {
     pub schedule: Option<Schedule>,
     pub startup_delay_ms: u64,
     pub depends_on: Vec<TaskId>,
+    pub runner_prefix: Option<String>,
     pub pids: Vec<u32>,
 }
 
@@ -59,6 +60,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 1000,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         }
     }
@@ -129,6 +131,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 5000,
             depends_on: vec![TaskId::new(), TaskId::new()],
+            runner_prefix: Some("python".to_string()),
             pids: vec![1234, 5678],
         };
 
@@ -153,6 +156,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 0,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         };
 

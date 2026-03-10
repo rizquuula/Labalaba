@@ -27,6 +27,11 @@
     )
   );
 
+  let scriptType = $state<'binary' | 'python'>(untrack(() => task?.config.runner_prefix ? 'python' : 'binary'));
+  let runnerPrefix = $state(untrack(() => task?.config.runner_prefix ?? 'python'));
+  let customRunner = $state('');
+  const runnerPresets = ['python', 'pythonw', 'uv run', 'pipenv run python', 'poetry run python'];
+
   let activeTab = $state<'basic' | 'advanced'>('basic');
   let saving = $state(false);
   let error = $state<string | null>(null);
@@ -46,8 +51,8 @@
     const selected = await open({
       multiple: false,
       filters: [{
-        name: 'Executable',
-        extensions: ['exe', 'bat', 'cmd', 'ps1']
+        name: scriptType === 'python' ? 'Python Script' : 'Executable',
+        extensions: scriptType === 'python' ? ['py'] : ['exe', 'bat', 'cmd', 'ps1']
       }]
     });
     if (selected && typeof selected === 'string') {
@@ -78,6 +83,11 @@
       return;
     }
 
+    // Handle runner prefix for Python scripts
+    const finalRunnerPrefix = scriptType === 'python' 
+      ? (runnerPrefix === 'custom' ? customRunner : runnerPrefix)
+      : undefined;
+
     const req: TaskRequest = {
       description: name.trim(),
       executable: executable.trim(),
@@ -89,6 +99,7 @@
       schedule: cronExpr.trim() ? { cron: cronExpr.trim() } : undefined,
       startup_delay_ms: startupDelay,
       depends_on: [],
+      runner_prefix: finalRunnerPrefix,
     };
 
     saving = true;
@@ -120,6 +131,17 @@
       </button>
     </div>
 
+    <div class="script-type-selector">
+      <label class="radio-group">
+        <input type="radio" name="scriptType" value="binary" bind:group={scriptType} />
+        <span>Binary File</span>
+      </label>
+      <label class="radio-group">
+        <input type="radio" name="scriptType" value="python" bind:group={scriptType} />
+        <span>Python Script</span>
+      </label>
+    </div>
+
     <div class="tabs">
       <button
         class="tab"
@@ -139,7 +161,37 @@
 
     <form onsubmit={handleSubmit}>
       {#if activeTab === 'basic'}
-        <div class="form-grid">
+        {#if scriptType === 'python'}
+          <div class="form-group full">
+            <label for="runner-prefix">Python Runner</label>
+            <select id="runner-prefix" class="input" bind:value={runnerPrefix}>
+              {#each runnerPresets as preset}
+                <option value={preset}>{preset}</option>
+              {/each}
+              <option value="custom">Custom...</option>
+            </select>
+          </div>
+          
+          {#if runnerPrefix === 'custom'}
+            <div class="form-group full">
+              <label for="custom-runner">Custom Runner Command</label>
+              <input id="custom-runner" class="input" type="text" bind:value={customRunner}
+                placeholder="e.g., python3.11 or /path/to/venv/bin/python" />
+              <small class="form-hint">Enter the full runner command (e.g., "uv run", "python -m venv")</small>
+            </div>
+          {/if}
+          
+          <div class="form-group full">
+            <label for="python-script">Python Script Path *</label>
+            <div class="input-row">
+              <input id="python-script" class="input" type="text" bind:value={executable}
+                placeholder="C:\path\to\script.py" required />
+              <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
+                Browse
+              </button>
+            </div>
+          </div>
+        {:else}
           <div class="form-group full">
             <label for="task-exe">Executable Path *</label>
             <div class="input-row">
@@ -150,18 +202,18 @@
               </button>
             </div>
           </div>
+        {/if}
 
-          <div class="form-group full">
-            <label for="task-args">Arguments</label>
-            <input id="task-args" class="input" type="text" bind:value={argsRaw}
-              placeholder="--port 8080 --config config.yaml" />
-          </div>
+        <div class="form-group full">
+          <label for="task-args">Arguments</label>
+          <input id="task-args" class="input" type="text" bind:value={argsRaw}
+            placeholder="--port 8080 --config config.yaml" />
+        </div>
 
-          <div class="form-group full">
-            <label for="task-name">Description *</label>
-            <input id="task-name" class="input" type="text" bind:value={name}
-              placeholder="My Application" required />
-          </div>
+        <div class="form-group full">
+          <label for="task-name">Description *</label>
+          <input id="task-name" class="input" type="text" bind:value={name}
+            placeholder="My Application" required />
         </div>
       {:else}
         <div class="form-grid">
@@ -240,6 +292,25 @@
     font-weight: 700;
   }
 
+  .script-type-selector {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: var(--surface-elevated);
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+  }
+
+  .radio-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+  }
+
   .tabs {
     display: flex;
     gap: 0.25rem;
@@ -293,6 +364,13 @@
     font-weight: 400;
     color: var(--text-muted);
     font-size: 0.75rem;
+  }
+
+  .form-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
   }
 
   .toggles {

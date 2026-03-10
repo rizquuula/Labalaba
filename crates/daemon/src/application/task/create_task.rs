@@ -21,6 +21,7 @@ impl CreateTask {
             schedule: req.schedule,
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on,
+            runner_prefix: req.runner_prefix,
             pids: req.pids,
         };
         task.validate()?;
@@ -48,6 +49,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 0,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         };
 
@@ -64,6 +66,7 @@ mod tests {
             schedule: req.schedule.clone(),
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on.clone(),
+            runner_prefix: req.runner_prefix.clone(),
             pids: req.pids.clone(),
         };
         
@@ -86,6 +89,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 0,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         };
 
@@ -101,6 +105,7 @@ mod tests {
             schedule: req.schedule.clone(),
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on.clone(),
+            runner_prefix: req.runner_prefix.clone(),
             pids: req.pids.clone(),
         };
 
@@ -125,6 +130,7 @@ mod tests {
             schedule: None,
             startup_delay_ms: 0,
             depends_on: vec![],
+            runner_prefix: None,
             pids: vec![],
         };
 
@@ -140,6 +146,7 @@ mod tests {
             schedule: req.schedule.clone(),
             startup_delay_ms: req.startup_delay_ms,
             depends_on: req.depends_on.clone(),
+            runner_prefix: req.runner_prefix.clone(),
             pids: req.pids.clone(),
         };
 

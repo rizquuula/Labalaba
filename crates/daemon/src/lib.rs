@@ -303,31 +303,66 @@ fn prune_pids<F: Fn(u32) -> bool>(original: &[u32], is_alive: F) -> Vec<u32> {
     original.iter().copied().filter(|&pid| is_alive(pid)).collect()
 }
 
-/// Spawn a background task to check for updates and emit event if available.
+/// Delay before the first update check runs, giving the frontend time to start.
+const UPDATE_CHECK_INITIAL_DELAY_SECS: u64 = 5;
+/// Lower bound on the configured update-check interval, so a misconfigured
+/// settings value can never hammer GitHub.
+const UPDATE_CHECK_MIN_INTERVAL_HOURS: u64 = 1;
+
+/// Spawn a background loop that periodically checks for updates.
+///
+/// Runs an initial check shortly after startup, then sleeps for
+/// `update_check_interval_hours` (re-read from settings each cycle, clamped to a
+/// sane minimum) before checking again. Startup/background check failures only
+/// log a warning — they never nag the user. The update callback fires only when
+/// the latest version differs from the one already notified this session, so the
+/// user is not pestered every interval for the same release.
 fn spawn_update_checker(
     state: Arc<AppState>,
     update_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
 ) {
     tokio::spawn(async move {
-        let uc = CheckUpdate { state };
-        match uc.execute().await {
-            Ok(info) => {
-                if info.available {
-                    tracing::info!(
-                        "Update available: {} (current: {})",
-                        info.latest_version.as_ref().unwrap_or(&"unknown".to_string()),
-                        info.current_version
-                    );
-                    if let Some(cb) = &update_callback {
-                        cb(info);
+        let mut last_notified: Option<String> = None;
+        tokio::time::sleep(std::time::Duration::from_secs(UPDATE_CHECK_INITIAL_DELAY_SECS)).await;
+
+        loop {
+            let uc = CheckUpdate { state: Arc::clone(&state) };
+            match uc.execute().await {
+                Ok(info) => {
+                    if info.available {
+                        tracing::info!(
+                            "Update available: {} (current: {})",
+                            info.latest_version.as_ref().unwrap_or(&"unknown".to_string()),
+                            info.current_version
+                        );
+                        // Store so the frontend can pull it on mount even if it
+                        // registered its listener after the event fired.
+                        *state.pending_update.write().await = Some(info.clone());
+
+                        let is_new = info.latest_version != last_notified;
+                        if is_new {
+                            last_notified = info.latest_version.clone();
+                            if let Some(cb) = &update_callback {
+                                cb(info);
+                            }
+                        }
+                    } else {
+                        tracing::debug!("No update available (current: {})", info.current_version);
                     }
-                } else {
-                    tracing::debug!("No update available (current: {})", info.current_version);
+                }
+                Err(e) => {
+                    // Background check: log only, never surface to the user.
+                    tracing::warn!("Failed to check for updates: {}", e);
                 }
             }
-            Err(e) => {
-                tracing::warn!("Failed to check for updates: {}", e);
-            }
+
+            let interval_hours = state
+                .settings
+                .read()
+                .await
+                .update_check_interval_hours
+                .max(UPDATE_CHECK_MIN_INTERVAL_HOURS);
+            tokio::time::sleep(std::time::Duration::from_secs(interval_hours * 3600)).await;
         }
     });
 }

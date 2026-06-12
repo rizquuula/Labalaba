@@ -13,31 +13,63 @@
   let autoScroll = $state(true);
   let loadingHistory = $state(false);
   let disconnect: (() => void) | null = null;
+  let destroyed = false;
+
+  function appendLive(entry: LogEntry) {
+    logs = [...logs.slice(-4999), entry];
+    if (autoScroll) {
+      setTimeout(() => {
+        container?.scrollTo({ top: container.scrollHeight });
+      }, 0);
+    }
+  }
 
   onMount(async () => {
     loadingHistory = true;
-    
+
+    // Buffer any live lines that arrive while history is loading; they are
+    // appended after the snapshot so nothing emitted during the fetch is lost.
+    let liveReady = false;
+    const buffer: LogEntry[] = [];
+
+    // Register the listener BEFORE fetching history so no lines slip through the
+    // gap. await guarantees the listener is attached before we proceed.
+    const stop = await connectLogStream(taskId, (entry) => {
+      if (liveReady) {
+        appendLive(entry);
+      } else {
+        buffer.push(entry);
+      }
+    });
+
+    // If the viewer was destroyed while the listener was attaching, clean up now.
+    if (destroyed) {
+      stop();
+      return;
+    }
+    disconnect = stop;
+
     const history = await fetchHistoricalLogs(taskId, 500);
     logs = history;
+    // Flush whatever arrived during the history fetch, then go live.
+    for (const entry of buffer) {
+      logs = [...logs.slice(-4999), entry];
+    }
+    buffer.length = 0;
+    liveReady = true;
     loadingHistory = false;
-    
+
     if (autoScroll && logs.length > 0) {
       setTimeout(() => {
         container?.scrollTo({ top: container.scrollHeight });
       }, 0);
     }
-    
-    disconnect = connectLogStream(taskId, (entry) => {
-      logs = [...logs.slice(-4999), entry];
-      if (autoScroll) {
-        setTimeout(() => {
-          container?.scrollTo({ top: container.scrollHeight });
-        }, 0);
-      }
-    });
   });
 
-  onDestroy(() => disconnect?.());
+  onDestroy(() => {
+    destroyed = true;
+    disconnect?.();
+  });
 
   function clearLogs() { logs = []; }
 

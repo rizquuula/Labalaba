@@ -11,25 +11,23 @@ export interface LogEntry {
 
 export type LogListener = (entry: LogEntry) => void;
 
-/** Subscribes to real-time log events for a task. Returns a cleanup function. */
-export function connectLogStream(
+/**
+ * Subscribes to real-time log events for a task. Awaits listener registration
+ * before resolving, so the caller can guarantee no lines are missed between the
+ * history fetch and the listener attaching. Returns a cleanup function; calling
+ * it before/after the listener resolves both correctly unlisten.
+ */
+export async function connectLogStream(
   taskId: string,
   onEntry: LogListener,
   onClose?: () => void,
-): () => void {
-  let unlisten: (() => void) | undefined;
-
-  listen<LogEntry>(`log:${taskId}`, (event) => {
+): Promise<() => void> {
+  const unlisten = await listen<LogEntry>(`log:${taskId}`, (event) => {
     onEntry(event.payload);
-  }).then((fn) => {
-    unlisten = fn;
   });
 
-  // Return cleanup — call the unlisten fn when available
   return () => {
-    if (unlisten) {
-      unlisten();
-    }
+    unlisten();
     onClose?.();
   };
 }

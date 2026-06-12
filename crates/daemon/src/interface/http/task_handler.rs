@@ -99,7 +99,7 @@ pub async fn remove(
         return err("Invalid task ID", StatusCode::BAD_REQUEST);
     };
     let id = TaskId(uuid);
-    let uc = DeleteTask { repo: Arc::clone(&state.task_repo) };
+    let uc = DeleteTask { repo: Arc::clone(&state.task_repo), log_writer: state.log_writer.clone() };
     match uc.execute(id).await {
         Ok(()) => ok(()),
         Err(e) => err(e.to_string(), StatusCode::NOT_FOUND),

@@ -69,7 +69,7 @@ pub async fn update_task(state: tauri::State<'_, Arc<AppState>>, id: String, req
 pub async fn delete_task(state: tauri::State<'_, Arc<AppState>>, id: String) -> Result<(), String> {
     let state = Arc::clone(&*state);
     let uuid = Uuid::parse_str(&id).map_err(|_| "Invalid task ID".to_string())?;
-    let uc = DeleteTask { repo: Arc::clone(&state.task_repo) };
+    let uc = DeleteTask { repo: Arc::clone(&state.task_repo), log_writer: state.log_writer.clone() };
     uc.execute(TaskId(uuid)).await.map_err(|e| e.to_string())
 }
 

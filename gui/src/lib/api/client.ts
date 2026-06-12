@@ -96,6 +96,7 @@ export const api = {
   },
   update: {
     check: () => invoke<UpdateInfo>('check_update'),
+    pending: () => invoke<UpdateInfo | null>('get_pending_update'),
   },
 };
 

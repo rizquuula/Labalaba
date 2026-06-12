@@ -8,7 +8,7 @@ use labalaba_shared::api::{LogEntry, UpdateInfo};
 use commands::{
     tasks::{list_tasks, get_task, create_task, update_task, delete_task,
             start_task, stop_task, restart_task, get_stats},
-    settings::{get_settings, update_settings, check_update},
+    settings::{get_settings, update_settings, check_update, get_pending_update},
     logs::get_logs,
 };
 
@@ -54,6 +54,7 @@ pub fn run() {
             get_settings,
             update_settings,
             check_update,
+            get_pending_update,
             get_logs,
         ])
         .build(tauri::generate_context!())

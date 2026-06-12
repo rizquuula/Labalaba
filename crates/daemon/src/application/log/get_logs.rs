@@ -1,105 +1,211 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use labalaba_shared::task::TaskId;
 use labalaba_shared::api::{LogEntry, LogStream};
 use crate::infrastructure::state::AppState;
 
+/// How many rotated files (besides the live `.log`) to scan, mirroring the
+/// rotation scheme in `infrastructure::log::file_writer`.
+const MAX_ROTATED_SCAN: usize = 5;
+
 pub struct GetLogs {
     pub state: Arc<AppState>,
 }
 
 impl GetLogs {
-    /// Get recent log lines from task log files (including rotated files)
+    /// Get the most recent `limit` log lines from a task's log files (live file
+    /// plus rotated siblings). Files are scanned newest-first and only as many
+    /// older files as needed are opened, so memory stays O(limit) rather than
+    /// loading every rotated file fully. Returned in chronological order.
     pub async fn execute(&self, task_id: &TaskId, limit: usize) -> anyhow::Result<Vec<LogEntry>> {
         let settings = self.state.settings.read().await;
         let log_dir = PathBuf::from(&settings.log_dir);
         drop(settings);
 
-        let mut all_lines: Vec<(String, String, String)> = Vec::new();
+        read_recent_lines(&log_dir, task_id, limit).await
+    }
+}
 
-        for i in 0..=5 {
-            let log_path = if i == 0 {
-                log_dir.join(format!("{}.log", task_id))
-            } else {
-                log_dir.join(format!("{}.log.{}", task_id, i))
-            };
+/// Get the most recent `limit` log lines from a task's log files (live file
+/// plus rotated siblings) in `log_dir`. Files are scanned newest-first and only
+/// as many older files as needed are opened, so memory stays O(limit) rather
+/// than loading every rotated file fully. Returned in chronological order.
+async fn read_recent_lines(
+    log_dir: &Path,
+    task_id: &TaskId,
+    limit: usize,
+) -> anyhow::Result<Vec<LogEntry>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
 
-            if log_path.exists() {
-                let file = File::open(&log_path).await?;
-                let reader = BufReader::new(file);
-                let mut lines = reader.lines();
+    // Newest-first file order: live `.log`, then `.log.1`, `.log.2`, ...
+    // Within a single file we keep the last `limit` lines in a bounded deque;
+    // across files we stop once we have `limit` total.
+    let mut collected: VecDeque<LogEntry> = VecDeque::with_capacity(limit);
 
-                while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(entry) = self.parse_log_line(task_id, &line) {
-                        all_lines.push((
-                            entry.task_id.clone(),
-                            entry.timestamp,
-                            format!("{}:{}", match entry.stream {
-                                LogStream::Stdout => "stdout",
-                                LogStream::Stderr => "stderr",
-                            }, entry.line),
-                        ));
-                    }
+    for i in 0..=MAX_ROTATED_SCAN {
+        if collected.len() >= limit {
+            break;
+        }
+
+        let log_path = if i == 0 {
+            log_dir.join(format!("{}.log", task_id))
+        } else {
+            log_dir.join(format!("{}.log.{}", task_id, i))
+        };
+
+        if !log_path.exists() {
+            continue;
+        }
+
+        // Read this file's parsed lines, keeping only its newest `limit`.
+        let file = File::open(&log_path).await?;
+        let reader = BufReader::new(file);
+        let mut lines = reader.lines();
+        let mut file_tail: VecDeque<LogEntry> = VecDeque::with_capacity(limit);
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(entry) = parse_log_line(task_id, &line) {
+                if file_tail.len() == limit {
+                    file_tail.pop_front();
                 }
+                file_tail.push_back(entry);
             }
         }
 
-        let total_lines = all_lines.len();
-        let start_idx = total_lines.saturating_sub(limit);
-
-        let result: Vec<LogEntry> = all_lines
-            .into_iter()
-            .skip(start_idx)
-            .map(|(task_id, timestamp, line)| {
-                let parts: Vec<&str> = line.splitn(2, ':').collect();
-                let stream_str = parts.first().unwrap_or(&"stdout");
-                let line_content = parts.get(1).unwrap_or(&parts[0]).to_string();
-                
-                LogEntry {
-                    task_id: task_id.clone(),
-                    timestamp,
-                    stream: if *stream_str == "stderr" {
-                        LogStream::Stderr
-                    } else {
-                        LogStream::Stdout
-                    },
-                    line: line_content,
-                }
-            })
-            .collect();
-
-        Ok(result)
+        // This file is older than everything already collected, so prepend its
+        // lines (chronologically before the newer ones), capping total.
+        let need = limit - collected.len();
+        let take = file_tail.len().min(need);
+        for entry in file_tail.into_iter().rev().take(take) {
+            collected.push_front(entry);
+        }
     }
 
-    fn parse_log_line(&self, task_id: &TaskId, line: &str) -> Option<LogEntry> {
-        let line = line.trim();
-        if !line.starts_with('[') {
-            return None;
+    Ok(collected.into_iter().collect())
+}
+
+fn parse_log_line(task_id: &TaskId, line: &str) -> Option<LogEntry> {
+    let line = line.trim();
+    if !line.starts_with('[') {
+        return None;
+    }
+
+    let rest = &line[1..];
+    let timestamp_end = rest.find(']')?;
+    let timestamp = rest[..timestamp_end].to_string();
+    let rest = &rest[timestamp_end + 1..];
+
+    let stream_start = rest.find('[')?;
+    let stream_end = rest.find(']')?;
+    let stream_str = &rest[stream_start + 1..stream_end];
+    let stream = if stream_str == "stderr" {
+        LogStream::Stderr
+    } else {
+        LogStream::Stdout
+    };
+
+    let line_content = rest[stream_end + 1..].to_string();
+
+    Some(LogEntry {
+        task_id: task_id.to_string(),
+        timestamp,
+        stream,
+        line: line_content,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    async fn write_file(dir: &Path, name: &str, lines: &[&str]) {
+        let path = dir.join(name);
+        let mut f = tokio::fs::File::create(&path).await.unwrap();
+        for l in lines {
+            f.write_all(format!("{}\n", l).as_bytes()).await.unwrap();
         }
+        f.flush().await.unwrap();
+    }
 
-        let rest = &line[1..];
-        let timestamp_end = rest.find(']')?;
-        let timestamp = rest[..timestamp_end].to_string();
-        let rest = &rest[timestamp_end + 1..];
+    fn line(ts: &str, content: &str) -> String {
+        format!("[{}] [stdout] {}", ts, content)
+    }
 
-        let stream_start = rest.find('[')?;
-        let stream_end = rest.find(']')?;
-        let stream_str = &rest[stream_start + 1..stream_end];
-        let stream = if stream_str == "stderr" {
-            LogStream::Stderr
-        } else {
-            LogStream::Stdout
-        };
+    #[tokio::test]
+    async fn reads_only_live_file_when_enough() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        write_file(
+            dir.path(),
+            &format!("{}.log", id),
+            &[&line("t1", "a"), &line("t2", "b"), &line("t3", "c")],
+        )
+        .await;
 
-        let line_content = rest[stream_end + 1..].to_string();
+        let out = read_recent_lines(dir.path(), &id, 2).await.unwrap();
+        assert_eq!(out.len(), 2);
+        // Newest two, chronological. The parser preserves the leading space
+        // after the stream marker (existing format — kept intentionally).
+        assert_eq!(out[0].line, " b");
+        assert_eq!(out[1].line, " c");
+    }
 
-        Some(LogEntry {
-            task_id: task_id.to_string(),
-            timestamp,
-            stream,
-            line: line_content,
-        })
+    #[tokio::test]
+    async fn spans_rotated_files_newest_first_chronological() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        // .log.2 is oldest, .log.1 next, .log is live (newest).
+        write_file(dir.path(), &format!("{}.log.2", id), &[&line("t1", "1"), &line("t2", "2")]).await;
+        write_file(dir.path(), &format!("{}.log.1", id), &[&line("t3", "3"), &line("t4", "4")]).await;
+        write_file(dir.path(), &format!("{}.log", id), &[&line("t5", "5"), &line("t6", "6")]).await;
+
+        // Ask for 5 — should pull all of live (6,5), all of .log.1 (4,3), and
+        // the newest one from .log.2 (2), returned chronologically.
+        let out = read_recent_lines(dir.path(), &id, 5).await.unwrap();
+        let lines: Vec<&str> = out.iter().map(|e| e.line.as_str()).collect();
+        assert_eq!(lines, vec![" 2", " 3", " 4", " 5", " 6"]);
+    }
+
+    #[tokio::test]
+    async fn does_not_open_older_files_when_satisfied_early() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        write_file(dir.path(), &format!("{}.log", id), &[&line("t5", "5"), &line("t6", "6")]).await;
+        // An older rotated file exists but should not be needed for limit=1.
+        write_file(dir.path(), &format!("{}.log.1", id), &[&line("t1", "old")]).await;
+
+        let out = read_recent_lines(dir.path(), &id, 1).await.unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].line, " 6");
+    }
+
+    #[tokio::test]
+    async fn limit_zero_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        write_file(dir.path(), &format!("{}.log", id), &[&line("t1", "a")]).await;
+        let out = read_recent_lines(dir.path(), &id, 0).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn preserves_stream_and_content_with_colons() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        let p = dir.path().join(format!("{}.log", id));
+        let mut f = tokio::fs::File::create(&p).await.unwrap();
+        f.write_all(b"[t1] [stderr] error: boom\n").await.unwrap();
+        f.flush().await.unwrap();
+
+        let out = read_recent_lines(dir.path(), &id, 10).await.unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0].stream, LogStream::Stderr));
+        assert_eq!(out[0].line, " error: boom");
     }
 }

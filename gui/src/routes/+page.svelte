@@ -7,6 +7,7 @@
   import LogViewer from '$lib/components/LogViewer.svelte';
   import Settings from '$lib/components/Settings.svelte';
   import { loadTasks, startPolling, tasks } from '$lib/stores/tasks';
+  import { api } from '$lib/api/client';
   import type { TaskDto } from '$lib/api/client';
   import type { UpdateInfo } from '$lib/api/client';
 
@@ -31,7 +32,18 @@
     const unlisten = await listen<UpdateInfo>('update-available', (event) => {
       updateInfo = event.payload;
     });
-    
+
+    // Pull any update the background checker already found before the listener
+    // above was registered (the event may have fired early).
+    try {
+      const pending = await api.update.pending();
+      if (pending && pending.available && !updateInfo) {
+        updateInfo = pending;
+      }
+    } catch (e) {
+      console.error('Failed to fetch pending update:', e);
+    }
+
     // Cleanup listener on destroy
     onDestroy(() => {
       unlisten();

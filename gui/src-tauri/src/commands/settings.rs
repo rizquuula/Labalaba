@@ -28,3 +28,15 @@ pub async fn check_update(state: tauri::State<'_, Arc<AppState>>) -> Result<Upda
     let uc = CheckUpdate { state: Arc::clone(&state) };
     uc.execute().await.map_err(|e| e.to_string())
 }
+
+/// Returns any update the background checker already found, so the frontend can
+/// pick it up on mount even if the `update-available` event fired before its
+/// listener was registered.
+#[tauri::command]
+pub async fn get_pending_update(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Option<UpdateInfo>, String> {
+    let state = Arc::clone(&*state);
+    let pending = state.pending_update.read().await.clone();
+    Ok(pending)
+}

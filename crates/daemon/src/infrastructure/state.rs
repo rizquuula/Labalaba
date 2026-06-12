@@ -35,6 +35,9 @@ pub struct AppState {
     pub log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
     /// Optional callback invoked when an update is available (used for Tauri event emission).
     pub update_event_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
+    /// Latest update found by a background check, stored so the frontend can pull
+    /// it on mount even if it registered its listener after the event fired.
+    pub pending_update: RwLock<Option<UpdateInfo>>,
 }
 
 impl AppState {
@@ -64,6 +67,7 @@ impl AppState {
             log_writer,
             log_event_callback,
             update_event_callback,
+            pending_update: RwLock::new(None),
         })
     }
 

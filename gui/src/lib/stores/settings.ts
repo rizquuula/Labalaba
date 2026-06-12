@@ -10,6 +10,9 @@ export const settings = writable<AppSettings>({
   auto_check_updates: true,
   update_check_interval_hours: 24,
   launch_on_startup: false,
+  log_dir: './logs',
+  log_max_file_size_mb: 10,
+  log_max_rotated_files: 5,
 });
 
 export const settingsLoading = writable(false);

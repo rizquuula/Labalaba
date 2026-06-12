@@ -30,14 +30,85 @@ impl YamlTaskRepository {
             return Ok(YamlStore::default());
         }
         let contents = tokio::fs::read_to_string(&self.path).await?;
-        Ok(serde_yaml::from_str(&contents)?)
+
+        // Fast path: a well-formed file parses strictly.
+        match serde_yaml::from_str::<YamlStore>(&contents) {
+            Ok(store) => Ok(store),
+            Err(strict_err) => {
+                // Before touching anything, copy the unparseable file aside so the
+                // user's data is never silently destroyed.
+                let backup = self.path.with_extension("yaml.corrupt-backup");
+                if let Err(e) = tokio::fs::copy(&self.path, &backup).await {
+                    tracing::warn!(
+                        "Failed to back up unparseable tasks file to {}: {}",
+                        backup.display(),
+                        e
+                    );
+                }
+
+                // Fall back to parsing as a generic Value and recovering each task
+                // entry individually, skipping entries that fail.
+                let recovered = recover_tasks(&contents);
+                if recovered.is_empty() {
+                    // Nothing salvageable: surface the original error, but only after
+                    // the backup copy above has been attempted.
+                    Err(anyhow::anyhow!(
+                        "Failed to parse tasks file {}: {}",
+                        self.path.display(),
+                        strict_err
+                    ))
+                } else {
+                    tracing::warn!(
+                        "Recovered {} task(s) from malformed tasks file {} (original backed up)",
+                        recovered.len(),
+                        self.path.display()
+                    );
+                    Ok(YamlStore { tasks: recovered })
+                }
+            }
+        }
     }
 
     async fn persist(&self, store: &YamlStore) -> anyhow::Result<()> {
         let yaml = serde_yaml::to_string(store)?;
-        tokio::fs::write(&self.path, yaml).await?;
+        // Write to a temp file in the SAME directory, then atomically rename over
+        // the target. A crash mid-write leaves the original intact rather than a
+        // truncated file. Rename is atomic on the same filesystem on Unix, and on
+        // Windows std/tokio rename replaces an existing destination.
+        let tmp = self.path.with_extension("yaml.tmp");
+        tokio::fs::write(&tmp, yaml).await?;
+        tokio::fs::rename(&tmp, &self.path).await?;
         Ok(())
     }
+}
+
+/// Recover individual task entries from a malformed tasks file. Parses the YAML
+/// as a generic value, then attempts to deserialize each entry under `tasks`
+/// independently, skipping (with a warning) any entry that fails.
+fn recover_tasks(contents: &str) -> Vec<TaskConfig> {
+    let value: serde_yaml::Value = match serde_yaml::from_str(contents) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("Could not parse tasks file as YAML during recovery: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let entries = match value.get("tasks").and_then(|t| t.as_sequence()) {
+        Some(seq) => seq,
+        None => return Vec::new(),
+    };
+
+    let mut recovered = Vec::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        match serde_yaml::from_value::<TaskConfig>(entry.clone()) {
+            Ok(config) => recovered.push(config),
+            Err(e) => {
+                tracing::warn!("Skipping unrecoverable task entry #{}: {}", idx, e);
+            }
+        }
+    }
+    recovered
 }
 
 #[async_trait]
@@ -156,5 +227,67 @@ mod tests {
             .update_pids(&TaskId::new(), Box::new(|mut pids| { pids.push(1); pids }))
             .await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_persist_is_atomic_no_temp_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.yaml");
+        let repo = YamlTaskRepository::new(path.clone());
+        let id = TaskId::new();
+        let store = YamlStore { tasks: vec![sample_config(id.clone())] };
+
+        repo.persist(&store).await.unwrap();
+
+        // Target exists and parses back; temp file is cleaned up by the rename.
+        assert!(path.exists());
+        assert!(!path.with_extension("yaml.tmp").exists());
+        let loaded = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(loaded.id, id);
+    }
+
+    #[tokio::test]
+    async fn test_load_recovers_well_formed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.yaml");
+        let repo = YamlTaskRepository::new(path);
+        let store = YamlStore {
+            tasks: vec![sample_config(TaskId::new()), sample_config(TaskId::new())],
+        };
+        repo.persist(&store).await.unwrap();
+
+        let loaded = repo.find_all().await.unwrap();
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_load_skips_one_bad_entry_and_backs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.yaml");
+        // One valid entry, one entry missing the required `executable` field.
+        let yaml = "tasks:\n  - id: 11111111-1111-1111-1111-111111111111\n    description: good\n    executable: /bin/true\n  - id: 22222222-2222-2222-2222-222222222222\n    description: bad\n";
+        tokio::fs::write(&path, yaml).await.unwrap();
+
+        let repo = YamlTaskRepository::new(path.clone());
+        let loaded = repo.find_all().await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].executable, "/bin/true");
+
+        // The original (unparseable-strictly) file was backed up before recovery.
+        assert!(path.with_extension("yaml.corrupt-backup").exists());
+    }
+
+    #[tokio::test]
+    async fn test_load_garbage_file_errors_after_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks.yaml");
+        tokio::fs::write(&path, ":\n::not yaml at all: [\n").await.unwrap();
+
+        let repo = YamlTaskRepository::new(path.clone());
+        let result = repo.find_all().await;
+        assert!(result.is_err());
+
+        // Even on hard failure, the original is preserved as a backup.
+        assert!(path.with_extension("yaml.corrupt-backup").exists());
     }
 }

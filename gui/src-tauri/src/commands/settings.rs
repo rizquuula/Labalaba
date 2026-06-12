@@ -18,6 +18,7 @@ pub async fn update_settings(state: tauri::State<'_, Arc<AppState>>, settings: A
         let mut s = state.settings.write().await;
         *s = settings.clone();
     }
+    state.save_settings().await.map_err(|e| e.to_string())?;
     Ok(settings)
 }
 

@@ -47,6 +47,7 @@ pub struct Schedule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskConfig {
     pub id: TaskId,
+    #[serde(default)]
     pub description: String,
     pub executable: String,
     #[serde(default)]

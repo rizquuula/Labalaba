@@ -21,6 +21,7 @@ export interface TaskDto {
   config: TaskConfig;
   status: 'stopped' | 'starting' | 'running' | 'stopping' | 'crashed';
   pid?: number;
+  pids: number[];
   started_at?: string;
   exit_code?: number;
   cpu_percent?: number;
@@ -48,6 +49,9 @@ export interface AppSettings {
   auto_check_updates: boolean;
   update_check_interval_hours: number;
   launch_on_startup: boolean;
+  log_dir: string;
+  log_max_file_size_mb: number;
+  log_max_rotated_files: number;
 }
 
 export interface UpdateInfo {

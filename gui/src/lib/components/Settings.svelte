@@ -11,6 +11,7 @@
   let updateInfo = $state<UpdateInfo | null>(null);
   let checkingUpdate = $state(false);
   let updateError = $state<string | null>(null);
+  let saveError = $state<string | null>(null);
 
   onMount(() => loadSettings());
 
@@ -19,12 +20,15 @@
 
   async function handleSave() {
     saving = true;
+    saveError = null;
     try {
       await saveSettings(draft);
       if (draft.theme !== $theme) {
         theme.set(draft.theme as 'dark' | 'light');
       }
       onClose();
+    } catch (e) {
+      saveError = String(e);
     } finally {
       saving = false;
     }
@@ -98,6 +102,34 @@
         </div>
       </section>
 
+      <!-- Logs -->
+      <section class="settings-section">
+        <h3 class="section-heading">Logs</h3>
+        <div class="setting-row">
+          <div>
+            <p class="setting-name">Log Directory</p>
+            <p class="setting-desc">Where per-task log files are written</p>
+          </div>
+          <input class="input input-sm" type="text" bind:value={draft.log_dir} />
+        </div>
+        <div class="setting-row">
+          <div>
+            <p class="setting-name">Max File Size (MB)</p>
+            <p class="setting-desc">Rotate a log file once it exceeds this size</p>
+          </div>
+          <input class="input input-sm" type="number" min="1" max="1024"
+            bind:value={draft.log_max_file_size_mb} />
+        </div>
+        <div class="setting-row">
+          <div>
+            <p class="setting-name">Max Rotated Files</p>
+            <p class="setting-desc">How many rotated log files to keep per task</p>
+          </div>
+          <input class="input input-sm" type="number" min="0" max="100"
+            bind:value={draft.log_max_rotated_files} />
+        </div>
+      </section>
+
       <!-- Notifications -->
       <section class="settings-section">
         <h3 class="section-heading">Notifications</h3>
@@ -164,6 +196,9 @@
     </div>
 
     <div class="modal-footer">
+      {#if saveError}
+        <p class="save-error">{saveError}</p>
+      {/if}
       <button type="button" class="btn" onclick={onClose}>Cancel</button>
       <button type="button" class="btn btn-primary" onclick={handleSave} disabled={saving}>
         {saving ? 'Saving…' : 'Save Settings'}
@@ -249,10 +284,17 @@
 
   .modal-footer {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 0.5rem;
     margin-top: 1.25rem;
     padding-top: 1rem;
     border-top: 1px solid var(--border-subtle);
+  }
+
+  .save-error {
+    margin-right: auto;
+    font-size: 0.8125rem;
+    color: var(--status-crashed);
   }
 </style>

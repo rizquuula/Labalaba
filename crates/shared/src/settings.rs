@@ -47,7 +47,12 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn save_to_file(&self, path: &str) -> anyhow::Result<()> {
         let yaml = serde_yaml::to_string(self)?;
-        std::fs::write(path, yaml)?;
+        // Write to a temp file in the same directory, then atomically rename over
+        // the target so a crash mid-write cannot truncate the live settings file.
+        let target = std::path::Path::new(path);
+        let tmp = target.with_extension("yaml.tmp");
+        std::fs::write(&tmp, yaml)?;
+        std::fs::rename(&tmp, target)?;
         Ok(())
     }
 

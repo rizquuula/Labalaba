@@ -1,4 +1,4 @@
-.PHONY: dev stop release-windows release-linux release-mac build-be check install cargo-check test clean help
+.PHONY: dev stop release-windows release-linux release-mac build-be check install cargo-check test clean version help
 
 .DEFAULT_GOAL := help
 
@@ -53,6 +53,11 @@ test: ## Run all Rust tests
 clean: ## Remove build artifacts (target/, node_modules/, .svelte-kit/)
 	cargo clean
 	rm -rf gui/node_modules gui/.svelte-kit gui/build
+
+# - Info -----------------------------------
+
+version: ## Print the current project version
+	@echo $(VERSION)
 
 # - Help -----------------------------------
 

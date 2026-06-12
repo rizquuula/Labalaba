@@ -14,22 +14,20 @@ impl StartTask {
         let task = self.state.task_repo.find_by_id(&id).await?
             .ok_or_else(|| anyhow::anyhow!("Task {} not found", id))?;
 
+        // Atomically claim the Starting state in a single critical section so
+        // two concurrent starts can't both pass the not-running check and spawn
+        // duplicate processes.
         {
-            let states = self.state.runtime_states.read().await;
-            if let Some(s) = states.get(&id) {
-                if s.is_running() {
-                    anyhow::bail!("Task {} is already running", id);
-                }
+            let mut states = self.state.runtime_states.write().await;
+            let claimed = states.entry(id.clone()).or_default().mark_starting_if_stopped();
+            if !claimed {
+                anyhow::bail!("Task {} is already running", id);
             }
         }
 
+        // Sleep only AFTER claiming Starting, so the slot is reserved while waiting.
         if task.startup_delay_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(task.startup_delay_ms)).await;
-        }
-
-        {
-            let mut states = self.state.runtime_states.write().await;
-            states.entry(id.clone()).or_default().mark_starting();
         }
 
         let mut handle = self.state.spawner.spawn(&task).await.inspect_err(|_| {
@@ -48,13 +46,12 @@ impl StartTask {
             states.entry(id.clone()).or_default().mark_running(pid);
         }
 
-        // Register PID to task and persist
-        let task = {
-            let mut task = task;
-            task.pids.push(pid);
-            self.state.task_repo.save(&task).await?;
-            task
-        };
+        // Register PID to task and persist via a locked read-modify-write so a
+        // concurrent StopTask clearing pids can't clobber this push (or vice versa).
+        self.state.task_repo.update_pids(&id, Box::new(move |mut pids| {
+            pids.push(pid);
+            pids
+        })).await?;
 
         // Register with resource monitor
         self.state.resource_monitor.register_task(id.clone(), pid).await;
@@ -114,24 +111,64 @@ impl StartTask {
         tokio::spawn(async move {
             let exit_status = handle.child.wait().await.ok();
             let exit_code = exit_status.and_then(|s| s.code());
-            let crashed = exit_code.map(|c| c != 0).unwrap_or(true);
+            let nonzero_exit = exit_code.map(|c| c != 0).unwrap_or(true);
 
-            {
+            // Decide how to react under a single critical section: a deliberate
+            // StopTask marks the state Stopping/Stopped before/while killing, so
+            // an exit during that window is intentional — never a crash, never a
+            // restart. Otherwise apply the backoff/cap bookkeeping.
+            enum Action {
+                Intentional,
+                Restart(u64),
+                CrashedNoRestart,
+            }
+
+            let action = {
                 let mut states = state_clone.runtime_states.write().await;
                 let rt = states.entry(id_clone.clone()).or_default();
-                if crashed {
-                    rt.mark_crashed(exit_code);
-                } else {
+
+                if rt.is_stopping_or_stopped() {
                     rt.mark_stopped(exit_code);
+                    Action::Intentional
+                } else if !nonzero_exit {
+                    rt.mark_stopped(exit_code);
+                    Action::Intentional
+                } else if !auto_restart {
+                    rt.mark_crashed(exit_code);
+                    Action::CrashedNoRestart
+                } else if rt.restart_cap_reached() {
+                    rt.mark_crashed(exit_code);
+                    Action::CrashedNoRestart
+                } else {
+                    let delay = rt.register_restart_attempt();
+                    rt.mark_crashed(exit_code);
+                    Action::Restart(delay)
                 }
-            }
+            };
 
             let _ = log_writer.close(&id_clone).await;
 
-            if crashed && auto_restart {
-                tracing::info!("Task {} crashed (code {:?}), queuing auto-restart", id_clone, exit_code);
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                let _ = restart_tx.send(id_clone).await;
+            match action {
+                Action::Intentional => {
+                    tracing::info!("Task {} exited intentionally (code {:?})", id_clone, exit_code);
+                }
+                Action::CrashedNoRestart => {
+                    tracing::warn!(
+                        "Task {} crashed (code {:?}); auto-restart disabled or retry cap reached",
+                        id_clone,
+                        exit_code
+                    );
+                }
+                Action::Restart(delay_secs) => {
+                    tracing::info!(
+                        "Task {} crashed (code {:?}), queuing auto-restart in {}s",
+                        id_clone,
+                        exit_code,
+                        delay_secs
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
+                    let _ = restart_tx.send(id_clone).await;
+                }
             }
         });
 

@@ -72,4 +72,89 @@ impl TaskRepository for YamlTaskRepository {
         store.tasks.retain(|t| &t.id != id);
         self.persist(&store).await
     }
+
+    async fn update_pids(
+        &self,
+        id: &TaskId,
+        mutate: Box<dyn FnOnce(Vec<u32>) -> Vec<u32> + Send>,
+    ) -> anyhow::Result<()> {
+        let _guard = self.lock.lock().await;
+        let mut store = self.load().await?;
+        {
+            let config = store
+                .tasks
+                .iter_mut()
+                .find(|t| &t.id == id)
+                .ok_or_else(|| anyhow::anyhow!("Task {} not found", id))?;
+            config.pids = mutate(std::mem::take(&mut config.pids));
+        }
+        self.persist(&store).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn sample_config(id: TaskId) -> TaskConfig {
+        TaskConfig {
+            id,
+            description: "test".to_string(),
+            executable: "/bin/true".to_string(),
+            arguments: vec![],
+            working_directory: None,
+            environment: HashMap::new(),
+            run_as_admin: false,
+            auto_restart: false,
+            schedule: None,
+            startup_delay_ms: 0,
+            depends_on: vec![],
+            runner_prefix: None,
+            pids: vec![],
+        }
+    }
+
+    async fn repo_with_one_task() -> (YamlTaskRepository, TaskId) {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+        // Drop the file handle but keep the path; the repo creates/writes it.
+        drop(file);
+        let repo = YamlTaskRepository::new(path);
+        let id = TaskId::new();
+        let store = YamlStore { tasks: vec![sample_config(id.clone())] };
+        repo.persist(&store).await.unwrap();
+        (repo, id)
+    }
+
+    #[tokio::test]
+    async fn test_update_pids_push_then_clear() {
+        let (repo, id) = repo_with_one_task().await;
+
+        repo.update_pids(&id, Box::new(|mut pids| { pids.push(42); pids })).await.unwrap();
+        let task = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(task.pids, vec![42]);
+
+        repo.update_pids(&id, Box::new(|_pids| Vec::new())).await.unwrap();
+        let task = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert!(task.pids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_pids_preserves_other_fields() {
+        let (repo, id) = repo_with_one_task().await;
+        repo.update_pids(&id, Box::new(|mut pids| { pids.push(7); pids })).await.unwrap();
+        let task = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(task.executable, "/bin/true");
+        assert_eq!(task.pids, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn test_update_pids_unknown_task_errors() {
+        let (repo, _id) = repo_with_one_task().await;
+        let err = repo
+            .update_pids(&TaskId::new(), Box::new(|mut pids| { pids.push(1); pids }))
+            .await;
+        assert!(err.is_err());
+    }
 }

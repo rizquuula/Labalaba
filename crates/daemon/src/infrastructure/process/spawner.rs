@@ -148,6 +148,13 @@ impl ProcessSpawner for OsProcessSpawner {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
+        // Put the child in its own process group so the whole tree can be
+        // signalled at once via kill(-pgid, ...) in kill_tree.
+        #[cfg(unix)]
+        {
+            cmd.process_group(0);
+        }
+
         let child = cmd.spawn()?;
         let pid = child.id()
             .ok_or_else(|| anyhow::anyhow!("Failed to get PID"))?;
@@ -177,17 +184,27 @@ impl ProcessSpawner for OsProcessSpawner {
         #[cfg(target_os = "windows")]
         {
             Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/F", "/T"])
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .output()
                 .await?;
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(unix)]
         {
-            Command::new("kill")
-                .args(["-TERM", "-"])
-                .arg(pid.to_string())
-                .output()
-                .await?;
+            // Children are spawned in their own process group (pgid == pid),
+            // so signalling the negative pid hits the whole tree at once.
+            let group_result = unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+            if group_result != 0 {
+                // Group kill failed (e.g. ESRCH because the leader already
+                // exited but a child lingers) — fall back to the direct PID.
+                let direct_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if direct_result != 0 {
+                    let err = std::io::Error::last_os_error();
+                    // ESRCH simply means the process is already gone; not an error.
+                    if err.raw_os_error() != Some(libc::ESRCH) {
+                        anyhow::bail!("Failed to kill PID {}: {}", pid, err);
+                    }
+                }
+            }
         }
         Ok(())
     }

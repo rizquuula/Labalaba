@@ -1,18 +1,7 @@
 name: Test
 
 on:
-  push:
-    branches: [master]
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.yaml'
-      - '**/*.yml'
-  pull_request:
-    branches: [master]
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.yaml'
-      - '**/*.yml'
+  workflow_dispatch:
 
 jobs:
   rust-test:

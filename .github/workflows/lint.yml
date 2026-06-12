@@ -1,0 +1,30 @@
+name: Lint
+
+# Supply-chain gate. Separate workflow from Test so a transient
+# `cargo audit` advisory doesn't block the test signal.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo audit` compares Cargo.lock against the RustSec advisory
+      # database. A failure doesn't block a merge by itself (the signal
+      # is advisory — it informs the next patch release) but we want it
+      # red and visible on every PR.
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

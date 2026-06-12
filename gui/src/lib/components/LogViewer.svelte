@@ -24,6 +24,30 @@
     }
   }
 
+  function sameEntry(a: LogEntry, b: LogEntry): boolean {
+    return a.timestamp === b.timestamp && a.stream === b.stream && a.line === b.line;
+  }
+
+  /**
+   * Length of the largest run where a prefix of `buffer` equals a suffix of
+   * `history` (the lines double-counted across the fetch boundary). Returns 0
+   * when nothing overlaps. Bounded by buffer length and history length.
+   */
+  function boundaryOverlap(history: LogEntry[], buffer: LogEntry[]): number {
+    const max = Math.min(history.length, buffer.length);
+    for (let k = max; k > 0; k--) {
+      let matches = true;
+      for (let i = 0; i < k; i++) {
+        if (!sameEntry(history[history.length - k + i], buffer[i])) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return k;
+    }
+    return 0;
+  }
+
   onMount(async () => {
     loadingHistory = true;
 
@@ -50,9 +74,16 @@
     disconnect = stop;
 
     const history = await fetchHistoricalLogs(taskId, 500);
+
+    // Each backend line is BOTH written to the history file AND emitted live, so
+    // a line produced inside the fetch window can appear in history *and* in the
+    // buffer. Those overlapping lines are necessarily a contiguous run that ends
+    // history and starts the buffer, so we only strip the largest boundary
+    // overlap (buffer prefix == history suffix) rather than globally de-duping —
+    // that preserves legitimately-repeated output elsewhere in the stream.
+    const overlap = boundaryOverlap(history, buffer);
     logs = history;
-    // Flush whatever arrived during the history fetch, then go live.
-    for (const entry of buffer) {
+    for (const entry of buffer.slice(overlap)) {
       logs = [...logs.slice(-4999), entry];
     }
     buffer.length = 0;

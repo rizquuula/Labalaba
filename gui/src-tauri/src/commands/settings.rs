@@ -19,6 +19,8 @@ pub async fn update_settings(state: tauri::State<'_, Arc<AppState>>, settings: A
         *s = settings.clone();
     }
     state.save_settings().await.map_err(|e| e.to_string())?;
+    // Live-apply log config so size/rotation changes take effect without restart.
+    state.apply_log_settings().await;
     Ok(settings)
 }
 

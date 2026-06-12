@@ -18,10 +18,29 @@
   // Keep draft in sync when settings load
   $effect(() => { draft = { ...$settings }; });
 
+  // Coerce a possibly-empty/NaN number input to an integer within [min, max],
+  // falling back to `fallback` when the value is missing/unparseable. HTML
+  // min/max are advisory only — they don't clamp the bound value — so we clamp
+  // here and ensure a real number (not a string) reaches the serde-typed Rust
+  // fields.
+  function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+    const n = typeof value === 'number' ? value : parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, Math.trunc(n)));
+  }
+
+  function sanitizeDraft() {
+    draft.daemon_port = clampInt(draft.daemon_port, 1024, 65535, 27015);
+    draft.log_buffer_lines = clampInt(draft.log_buffer_lines, 100, 50000, 5000);
+    draft.log_max_file_size_mb = clampInt(draft.log_max_file_size_mb, 1, 1024, 10);
+    draft.log_max_rotated_files = clampInt(draft.log_max_rotated_files, 0, 100, 5);
+  }
+
   async function handleSave() {
     saving = true;
     saveError = null;
     try {
+      sanitizeDraft();
       await saveSettings(draft);
       if (draft.theme !== $theme) {
         theme.set(draft.theme as 'dark' | 'light');

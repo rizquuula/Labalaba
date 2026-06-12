@@ -28,6 +28,9 @@ pub async fn update(
             Json(ApiResponse::err(format!("Failed to save settings: {}", e)))
         );
     }
-    
+
+    // Live-apply log config so size/rotation changes take effect without restart.
+    state.apply_log_settings().await;
+
     (StatusCode::OK, Json(ApiResponse::ok(new_settings)))
 }

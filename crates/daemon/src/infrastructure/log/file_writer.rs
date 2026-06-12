@@ -12,10 +12,20 @@ const FLUSH_EVERY_LINES: u64 = 50;
 /// Flush the buffer once this long has elapsed since the last flush.
 const FLUSH_EVERY: Duration = Duration::from_millis(500);
 
-pub struct LogFileWriter {
+/// Runtime-tunable log config. Held behind a `Mutex` on the writer so a settings
+/// update can change rotation behaviour without restarting the daemon. `log_dir`
+/// changes apply to writers opened *after* the change (already-open files keep
+/// their path); `max_file_size_mb` / `max_rotated_files` take effect on the next
+/// write/rotation.
+#[derive(Clone)]
+struct LogConfig {
     log_dir: PathBuf,
     max_file_size_mb: usize,
     max_rotated_files: usize,
+}
+
+pub struct LogFileWriter {
+    config: Arc<Mutex<LogConfig>>,
     /// Map of per-task writer handles. The outer map lock is held only to
     /// fetch/insert a handle; the actual write/flush happens under the
     /// per-task lock, so tasks no longer serialize against each other.
@@ -55,15 +65,37 @@ impl WriterHandle {
 impl LogFileWriter {
     pub fn new(log_dir: PathBuf, max_file_size_mb: usize, max_rotated_files: usize) -> Self {
         Self {
-            log_dir,
-            max_file_size_mb,
-            max_rotated_files,
+            config: Arc::new(Mutex::new(LogConfig {
+                log_dir,
+                max_file_size_mb,
+                max_rotated_files,
+            })),
             writers: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
+    /// Apply updated log settings at runtime (called from the settings update
+    /// path). `max_file_size_mb` and `max_rotated_files` take effect on the next
+    /// write/rotation; `log_dir` applies only to writers opened after this call.
+    /// `log_dir` is resolved/absolute as supplied by the caller.
+    pub async fn update_config(
+        &self,
+        log_dir: PathBuf,
+        max_file_size_mb: usize,
+        max_rotated_files: usize,
+    ) {
+        let mut cfg = self.config.lock().await;
+        cfg.log_dir = log_dir;
+        cfg.max_file_size_mb = max_file_size_mb;
+        cfg.max_rotated_files = max_rotated_files;
+    }
+
+    async fn log_dir(&self) -> PathBuf {
+        self.config.lock().await.log_dir.clone()
+    }
+
     pub async fn init_dir(&self) -> anyhow::Result<()> {
-        fs::create_dir_all(&self.log_dir).await?;
+        fs::create_dir_all(&self.log_dir().await).await?;
         Ok(())
     }
 
@@ -90,8 +122,9 @@ impl LogFileWriter {
 
     /// Open the log file for a task and build a fresh handle (no map mutation).
     async fn open_handle(&self, task_id: &TaskId) -> anyhow::Result<WriterHandle> {
-        let log_path = self.log_dir.join(format!("{}.log", task_id));
-        fs::create_dir_all(&self.log_dir).await?;
+        let log_dir = self.log_dir().await;
+        let log_path = log_dir.join(format!("{}.log", task_id));
+        fs::create_dir_all(&log_dir).await?;
 
         let metadata = fs::metadata(&log_path).await.ok();
         let current_size = metadata.map(|m| m.len()).unwrap_or(0);
@@ -122,6 +155,8 @@ impl LogFileWriter {
         let line_bytes = line.as_bytes();
         let line_len = line_bytes.len() as u64;
 
+        let max_file_size_mb = self.config.lock().await.max_file_size_mb;
+
         let handle = self.handle_for(task_id).await?;
 
         // Decide whether a rotation is needed under the per-task lock, but
@@ -129,10 +164,19 @@ impl LogFileWriter {
         // the writer in), then re-fetch the (possibly new) handle to write.
         let needs_rotate = {
             let h = handle.lock().await;
-            h.current_size + line_len > (self.max_file_size_mb as u64 * 1024 * 1024)
+            h.current_size + line_len > (max_file_size_mb as u64 * 1024 * 1024)
         };
 
         if needs_rotate {
+            // Flush the soon-to-be-rotated writer first. tokio's BufWriter does
+            // NOT flush on drop, so without this any buffered-but-unflushed
+            // lines (held back by the flush policy) would be lost the moment the
+            // live file is renamed and the handle replaced.
+            {
+                let mut h = handle.lock().await;
+                let _ = h.writer.flush().await;
+                let _ = h.writer.shutdown().await;
+            }
             self.rotate(task_id).await?;
             self.open(task_id).await?;
             let handle = self.handle_for(task_id).await?;
@@ -153,18 +197,22 @@ impl LogFileWriter {
     }
 
     async fn rotate(&self, task_id: &TaskId) -> anyhow::Result<()> {
-        let log_path = self.log_dir.join(format!("{}.log", task_id));
+        let (log_dir, max_rotated_files) = {
+            let cfg = self.config.lock().await;
+            (cfg.log_dir.clone(), cfg.max_rotated_files)
+        };
+        let log_path = log_dir.join(format!("{}.log", task_id));
 
         if !log_path.exists() {
             return Ok(());
         }
 
-        for i in (1..self.max_rotated_files).rev() {
-            let old_path = self.log_dir.join(format!("{}.log.{}", task_id, i));
-            let new_path = self.log_dir.join(format!("{}.log.{}", task_id, i + 1));
+        for i in (1..max_rotated_files).rev() {
+            let old_path = log_dir.join(format!("{}.log.{}", task_id, i));
+            let new_path = log_dir.join(format!("{}.log.{}", task_id, i + 1));
 
             if old_path.exists() {
-                if i == self.max_rotated_files - 1 {
+                if i == max_rotated_files - 1 {
                     fs::remove_file(old_path).await.ok();
                 } else {
                     fs::rename(old_path, new_path).await.ok();
@@ -172,7 +220,7 @@ impl LogFileWriter {
             }
         }
 
-        let rotated_path = self.log_dir.join(format!("{}.log.1", task_id));
+        let rotated_path = log_dir.join(format!("{}.log.1", task_id));
         fs::rename(&log_path, &rotated_path).await.ok();
 
         Ok(())
@@ -199,10 +247,14 @@ impl LogFileWriter {
     pub async fn delete_task_logs(&self, task_id: &TaskId) {
         self.close(task_id).await;
 
-        let live = self.log_dir.join(format!("{}.log", task_id));
+        let (log_dir, max_rotated_files) = {
+            let cfg = self.config.lock().await;
+            (cfg.log_dir.clone(), cfg.max_rotated_files)
+        };
+        let live = log_dir.join(format!("{}.log", task_id));
         let mut paths = vec![live];
-        for i in 1..=self.max_rotated_files {
-            paths.push(self.log_dir.join(format!("{}.log.{}", task_id, i)));
+        for i in 1..=max_rotated_files {
+            paths.push(log_dir.join(format!("{}.log.{}", task_id, i)));
         }
 
         for path in paths {
@@ -232,9 +284,7 @@ impl LogFileWriter {
 impl Clone for LogFileWriter {
     fn clone(&self) -> Self {
         Self {
-            log_dir: self.log_dir.clone(),
-            max_file_size_mb: self.max_file_size_mb,
-            max_rotated_files: self.max_rotated_files,
+            config: Arc::clone(&self.config),
             writers: Arc::clone(&self.writers),
         }
     }
@@ -311,6 +361,75 @@ mod tests {
         let contents = read_log(dir.path(), &id).await;
         assert!(contents.contains("l0"));
         assert!(contents.contains(&format!("l{}", FLUSH_EVERY_LINES - 1)));
+    }
+
+    #[tokio::test]
+    async fn rotation_flushes_buffered_lines_into_rotated_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        // 1 MB cap; a handful of small lines stay below the flush threshold so
+        // they sit buffered (unflushed) until rotation is forced.
+        let w = LogFileWriter::new(dir.path().to_path_buf(), 1, 5);
+        w.init_dir().await.unwrap();
+
+        // A few lines below FLUSH_EVERY_LINES — buffered, not yet on disk.
+        for i in 0..3 {
+            w.write(&id, &entry(&format!("buffered{}", i))).await.unwrap();
+        }
+
+        // Force a rotation by writing a line larger than the 1 MB cap. The old
+        // (buffered) writer must be flushed before its file is renamed, or the
+        // three buffered lines would be lost.
+        let big = "x".repeat(1024 * 1024 + 1);
+        w.write(&id, &entry(&big)).await.unwrap();
+
+        // The previously-buffered lines must now live in the rotated file.
+        let rotated = tokio::fs::read_to_string(dir.path().join(format!("{}.log.1", id)))
+            .await
+            .unwrap();
+        assert!(rotated.contains("buffered0"));
+        assert!(rotated.contains("buffered1"));
+        assert!(rotated.contains("buffered2"));
+    }
+
+    #[tokio::test]
+    async fn update_config_applies_max_file_size_to_subsequent_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        // Start with a large cap so nothing rotates.
+        let w = LogFileWriter::new(dir.path().to_path_buf(), 1024, 5);
+        w.init_dir().await.unwrap();
+
+        w.write(&id, &entry("before")).await.unwrap();
+        assert!(!dir.path().join(format!("{}.log.1", id)).exists());
+
+        // Shrink the cap at runtime; the next write must trigger a rotation.
+        w.update_config(dir.path().to_path_buf(), 1, 5).await;
+        let big = "y".repeat(1024 * 1024 + 1);
+        w.write(&id, &entry(&big)).await.unwrap();
+
+        let rotated = tokio::fs::read_to_string(dir.path().join(format!("{}.log.1", id)))
+            .await
+            .unwrap();
+        assert!(rotated.contains("before"));
+    }
+
+    #[tokio::test]
+    async fn update_config_log_dir_applies_to_new_writers() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        let w = LogFileWriter::new(dir_a.path().to_path_buf(), 1024, 5);
+        w.init_dir().await.unwrap();
+
+        // Repoint at dir_b before opening this task's writer.
+        w.update_config(dir_b.path().to_path_buf(), 1024, 5).await;
+        w.write(&id, &entry("inb")).await.unwrap();
+        w.close(&id).await;
+
+        let in_b = read_log(dir_b.path(), &id).await;
+        assert!(in_b.contains("inb"));
+        assert!(!dir_a.path().join(format!("{}.log", id)).exists());
     }
 
     #[tokio::test]

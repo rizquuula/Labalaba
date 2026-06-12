@@ -104,11 +104,11 @@ pub async fn init_app_state(
     recover_task_states(Arc::clone(&state)).await;
     tokio::spawn(restart_loop(restart_rx, Arc::clone(&state)));
 
-    // Auto-check for updates if enabled
-    if settings.auto_check_updates {
-        let callback = state.update_event_callback.clone();
-        spawn_update_checker(Arc::clone(&state), callback);
-    }
+    // Always spawn the update checker; it re-reads `auto_check_updates` each
+    // cycle and skips (but stays alive) while disabled, so toggling the setting
+    // at runtime takes effect without a restart.
+    let callback = state.update_event_callback.clone();
+    spawn_update_checker(Arc::clone(&state), callback);
 
     Ok(state)
 }
@@ -224,19 +224,23 @@ async fn recovery_exit_watcher(
     loop {
         tokio::time::sleep(interval).await;
 
-        // If another code path replaced our PID in the persisted list, this
-        // watcher is stale — stop without touching any state.
+        // Liveness first: the common case is the process is still running, and a
+        // plain OS check is far cheaper than re-reading and parsing tasks.yaml.
+        // The repo is only consulted once the process is found gone (below).
+        if is_process_running(pid, expected_stem.as_deref()) {
+            continue;
+        }
+
+        // The process is gone. Before acting, confirm we still own this PID in
+        // the persisted list — if another code path (Stop/Restart) replaced it,
+        // this watcher is stale and must stop without touching any state.
         match state.task_repo.find_by_id(&id).await {
             Ok(Some(t)) if t.pids.contains(&pid) => {}
             _ => return,
         }
 
-        if is_process_running(pid, expected_stem.as_deref()) {
-            continue;
-        }
-
-        // The process is gone. Clear its PID, then apply the same intentional-
-        // vs-crash decision StartTask uses.
+        // Clear its PID, then apply the same intentional-vs-crash decision
+        // StartTask uses.
         let _ = state
             .task_repo
             .update_pids(&id, Box::new(move |pids| {
@@ -313,7 +317,10 @@ const UPDATE_CHECK_MIN_INTERVAL_HOURS: u64 = 1;
 ///
 /// Runs an initial check shortly after startup, then sleeps for
 /// `update_check_interval_hours` (re-read from settings each cycle, clamped to a
-/// sane minimum) before checking again. Startup/background check failures only
+/// sane minimum) before checking again. The `auto_check_updates` flag is also
+/// re-read each cycle: while disabled the loop just sleeps and skips the check,
+/// so toggling it at runtime takes effect without a restart. Startup/background
+/// check failures only
 /// log a warning — they never nag the user. The update callback fires only when
 /// the latest version differs from the one already notified this session, so the
 /// user is not pestered every interval for the same release.
@@ -326,6 +333,22 @@ fn spawn_update_checker(
         tokio::time::sleep(std::time::Duration::from_secs(UPDATE_CHECK_INITIAL_DELAY_SECS)).await;
 
         loop {
+            // Re-read the enable flag each cycle so toggling auto-update off at
+            // runtime stops the polling (and toggling it back on resumes it)
+            // without a restart. Don't hold the settings lock across the await.
+            let (enabled, interval_hours) = {
+                let s = state.settings.read().await;
+                (
+                    s.auto_check_updates,
+                    s.update_check_interval_hours.max(UPDATE_CHECK_MIN_INTERVAL_HOURS),
+                )
+            };
+
+            if !enabled {
+                tokio::time::sleep(std::time::Duration::from_secs(interval_hours * 3600)).await;
+                continue;
+            }
+
             let uc = CheckUpdate { state: Arc::clone(&state) };
             match uc.execute().await {
                 Ok(info) => {
@@ -356,12 +379,6 @@ fn spawn_update_checker(
                 }
             }
 
-            let interval_hours = state
-                .settings
-                .read()
-                .await
-                .update_check_interval_hours
-                .max(UPDATE_CHECK_MIN_INTERVAL_HOURS);
             tokio::time::sleep(std::time::Duration::from_secs(interval_hours * 3600)).await;
         }
     });

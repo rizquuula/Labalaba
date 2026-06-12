@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -45,7 +46,7 @@ jobs:
       - name: Set version from release tag
         shell: bash
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           echo "Setting version to $VERSION"
           # Update tauri.conf.json
@@ -101,5 +102,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: gui
-          releaseId: ${{ github.event.release.id }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Labalaba ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install this version.'
+          releaseDraft: false
+          prerelease: false
           args: --target ${{ matrix.target }}

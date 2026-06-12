@@ -7,8 +7,18 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/lint.yml'
   pull_request:
     branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/lint.yml'
 
 jobs:
   audit:

@@ -136,6 +136,16 @@ impl LogFileWriter {
             let _ = handle.writer.into_inner().flush().await;
         }
     }
+
+    /// Flush and close every open writer. Used on app shutdown so buffered log
+    /// lines are not lost when the process exits. Best-effort: per-writer flush
+    /// errors are ignored.
+    pub async fn close_all(&self) {
+        let mut writers = self.writers.lock().await;
+        for (_id, handle) in writers.drain() {
+            let _ = handle.writer.into_inner().flush().await;
+        }
+    }
 }
 
 impl Drop for LogFileWriter {

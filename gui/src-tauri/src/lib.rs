@@ -1,8 +1,9 @@
 mod commands;
 
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Manager, RunEvent};
 use labalaba_daemon::init_app_state;
+use labalaba_daemon::infrastructure::state::AppState;
 use labalaba_shared::api::{LogEntry, UpdateInfo};
 use commands::{
     tasks::{list_tasks, get_task, create_task, update_task, delete_task,
@@ -55,6 +56,19 @@ pub fn run() {
             check_update,
             get_logs,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // On exit, best-effort flush daemon state (log writers) so buffered
+            // lines reach disk. Managed child processes are intentionally left
+            // running — that is the "survive app close" feature.
+            if let RunEvent::Exit = event {
+                if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                    let state = Arc::clone(&state);
+                    tauri::async_runtime::block_on(async move {
+                        state.shutdown().await;
+                    });
+                }
+            }
+        });
 }

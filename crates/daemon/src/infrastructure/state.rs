@@ -72,4 +72,11 @@ impl AppState {
         settings.save_to_file(&self.settings_path)?;
         Ok(())
     }
+
+    /// Best-effort flush on app exit. Flushes/closes all log writers so buffered
+    /// lines reach disk. Managed child processes are deliberately left running
+    /// (the "survive app close" feature) — this does NOT kill anything.
+    pub async fn shutdown(&self) {
+        self.log_writer.close_all().await;
+    }
 }

@@ -11,6 +11,7 @@ use labalaba_shared::task::TaskId;
 use infrastructure::{
     persistence::yaml_repository::YamlTaskRepository,
     process::spawner::OsProcessSpawner,
+    process::liveness::{expected_process_stem, is_task_process_alive},
     updater::github_updater::GithubUpdater,
     state::AppState,
     log::file_writer::LogFileWriter,
@@ -36,22 +37,18 @@ fn resolve(base: &Path, p: &str) -> PathBuf {
     }
 }
 
-/// Check if a process with the given PID is still running.
-#[cfg(target_os = "windows")]
-pub fn is_process_running(pid: u32) -> bool {
-    use std::process::Command;
-    let output = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {}", pid), "/NH"])
-        .output();
-    match output {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn is_process_running(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+/// Check if a process with the given PID is still alive AND (best effort)
+/// belongs to a task whose process image stem is `expected_stem`.
+///
+/// `expected_stem` should come from
+/// [`infrastructure::process::liveness::expected_process_stem`]. When it is
+/// `None` (no usable executable name) this degrades to a plain liveness check.
+/// The identity check is conservative: on platforms where identity can be
+/// determined, a recycled PID running a *different* process is reported as not
+/// running, so recovery marks the task Crashed rather than later killing a
+/// stranger.
+pub fn is_process_running(pid: u32, expected_stem: Option<&str>) -> bool {
+    is_task_process_alive(pid, expected_stem)
 }
 
 /// Load settings from `{data_dir}/settings.yaml`, falling back to defaults.
@@ -127,42 +124,183 @@ pub async fn restart_loop(mut rx: mpsc::Receiver<TaskId>, state: Arc<AppState>) 
     }
 }
 
+/// Interval at which a recovered task's liveness watcher polls the OS.
+const RECOVERY_POLL_INTERVAL_SECS: u64 = 2;
+
 /// Recover runtime states for tasks with persisted PIDs on daemon startup.
+///
+/// For each task with persisted PIDs we re-check liveness *with identity*
+/// (guarding against recycled PIDs), prune dead/foreign PIDs from the persisted
+/// list, then mark the task Running (with a polling exit watcher attached) or
+/// Crashed. Recovered processes' stdout/stderr cannot be re-attached — those
+/// pipes died with the previous parent — so logs are not re-streamed.
 pub async fn recover_task_states(state: Arc<AppState>) {
-    match state.task_repo.find_all().await {
-        Ok(tasks) => {
-            for task in tasks {
-                if !task.pids.is_empty() {
-                    let alive_pids: Vec<u32> = task.pids.iter()
-                        .filter(|&&pid| is_process_running(pid))
-                        .copied()
-                        .collect();
-
-                    let mut states = state.runtime_states.write().await;
-                    let rt = states.entry(task.id.clone()).or_default();
-
-                    if !alive_pids.is_empty() {
-                        rt.mark_running(*alive_pids.first().unwrap());
-                        tracing::info!(
-                            "Recovered task {} as Running with {} alive PID(s)",
-                            task.id,
-                            alive_pids.len()
-                        );
-                    } else {
-                        rt.mark_crashed(None);
-                        tracing::info!(
-                            "Recovered task {} as Crashed (no alive PIDs from: {:?})",
-                            task.id,
-                            task.pids
-                        );
-                    }
-                }
-            }
-        }
+    let tasks = match state.task_repo.find_all().await {
+        Ok(tasks) => tasks,
         Err(e) => {
             tracing::warn!("Failed to load tasks for recovery: {}", e);
+            return;
+        }
+    };
+
+    for task in tasks {
+        if task.pids.is_empty() {
+            continue;
+        }
+
+        let expected_stem = expected_process_stem(&task);
+        let original_pids = task.pids.clone();
+        let alive_pids = prune_pids(&original_pids, |pid| {
+            is_process_running(pid, expected_stem.as_deref())
+        });
+
+        // Prune the persisted PID list down to verified-alive PIDs so a later
+        // Stop never targets a dead or recycled (foreign) PID. Tasks with no
+        // survivors get pids = [] persisted.
+        if alive_pids != original_pids {
+            let pruned = alive_pids.clone();
+            if let Err(e) = state
+                .task_repo
+                .update_pids(&task.id, Box::new(move |_| pruned))
+                .await
+            {
+                tracing::warn!("Failed to prune stale PIDs for task {}: {}", task.id, e);
+            }
+        }
+
+        {
+            let mut states = state.runtime_states.write().await;
+            let rt = states.entry(task.id.clone()).or_default();
+            if let Some(&pid) = alive_pids.first() {
+                rt.mark_running(pid);
+            } else {
+                rt.mark_crashed(None);
+            }
+        }
+
+        if let Some(&pid) = alive_pids.first() {
+            tracing::info!(
+                "Recovered task {} as Running (pid {}, {} alive PID(s))",
+                task.id,
+                pid,
+                alive_pids.len()
+            );
+            tokio::spawn(recovery_exit_watcher(
+                Arc::clone(&state),
+                task.id.clone(),
+                pid,
+                expected_stem,
+                task.auto_restart,
+            ));
+        } else {
+            tracing::info!(
+                "Recovered task {} as Crashed (no alive PIDs from: {:?})",
+                task.id,
+                original_pids
+            );
         }
     }
+}
+
+/// Poll a recovered process until it disappears, then mirror the StartTask exit
+/// watcher's crash/restart semantics. Unlike StartTask (which `child.wait()`s a
+/// pipe it owns) this can only poll the OS, since the recovered child is not our
+/// direct descendant.
+///
+/// Termination conditions (the watcher stops polling when any holds):
+///   * the process is no longer alive/ours — handle exit, then return;
+///   * the task's persisted PIDs no longer contain `pid` — another path
+///     (Stop/Restart) took over; leave its state alone and return;
+///   * the in-memory status moved away from Running and the recorded pid no
+///     longer matches `pid` — same reasoning.
+async fn recovery_exit_watcher(
+    state: Arc<AppState>,
+    id: TaskId,
+    pid: u32,
+    expected_stem: Option<String>,
+    auto_restart: bool,
+) {
+    let interval = std::time::Duration::from_secs(RECOVERY_POLL_INTERVAL_SECS);
+    loop {
+        tokio::time::sleep(interval).await;
+
+        // If another code path replaced our PID in the persisted list, this
+        // watcher is stale — stop without touching any state.
+        match state.task_repo.find_by_id(&id).await {
+            Ok(Some(t)) if t.pids.contains(&pid) => {}
+            _ => return,
+        }
+
+        if is_process_running(pid, expected_stem.as_deref()) {
+            continue;
+        }
+
+        // The process is gone. Clear its PID, then apply the same intentional-
+        // vs-crash decision StartTask uses.
+        let _ = state
+            .task_repo
+            .update_pids(&id, Box::new(move |pids| {
+                pids.into_iter().filter(|&p| p != pid).collect()
+            }))
+            .await;
+
+        enum Action {
+            Intentional,
+            Restart(u64),
+            CrashedNoRestart,
+        }
+
+        let action = {
+            let mut states = state.runtime_states.write().await;
+            let rt = states.entry(id.clone()).or_default();
+            if rt.is_stopping_or_stopped() {
+                rt.mark_stopped(None);
+                Action::Intentional
+            } else if !auto_restart {
+                rt.mark_crashed(None);
+                Action::CrashedNoRestart
+            } else if rt.restart_cap_reached() {
+                rt.mark_crashed(None);
+                Action::CrashedNoRestart
+            } else {
+                let delay = rt.register_restart_attempt();
+                rt.mark_crashed(None);
+                Action::Restart(delay)
+            }
+        };
+
+        let _ = state.log_writer.close(&id).await;
+
+        match action {
+            Action::Intentional => {
+                tracing::info!("Recovered task {} exited intentionally", id);
+            }
+            Action::CrashedNoRestart => {
+                tracing::warn!(
+                    "Recovered task {} disappeared; auto-restart disabled or retry cap reached",
+                    id
+                );
+            }
+            Action::Restart(delay_secs) => {
+                tracing::info!(
+                    "Recovered task {} disappeared, queuing auto-restart in {}s",
+                    id,
+                    delay_secs
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                let _ = state.restart_tx.send(id).await;
+            }
+        }
+        return;
+    }
+}
+
+/// Compute the pruned PID list from an original list and a liveness predicate.
+/// Extracted so the recovery pruning logic is unit-testable without spawning
+/// real processes. Only PIDs the predicate reports alive are kept, order
+/// preserved.
+fn prune_pids<F: Fn(u32) -> bool>(original: &[u32], is_alive: F) -> Vec<u32> {
+    original.iter().copied().filter(|&pid| is_alive(pid)).collect()
 }
 
 /// Spawn a background task to check for updates and emit event if available.
@@ -192,4 +330,93 @@ fn spawn_update_checker(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::task::repository::TaskRepository;
+
+    #[test]
+    fn prune_keeps_only_alive_pids_in_order() {
+        let original = vec![10, 20, 30, 40];
+        // Treat even PIDs as alive.
+        let pruned = prune_pids(&original, |pid| pid % 20 == 0);
+        assert_eq!(pruned, vec![20, 40]);
+    }
+
+    #[test]
+    fn prune_all_dead_yields_empty() {
+        let original = vec![1, 2, 3];
+        let pruned = prune_pids(&original, |_| false);
+        assert!(pruned.is_empty());
+    }
+
+    #[test]
+    fn prune_all_alive_is_identity() {
+        let original = vec![5, 6, 7];
+        let pruned = prune_pids(&original, |_| true);
+        assert_eq!(pruned, original);
+    }
+
+    fn task_with_pids(pids: Vec<u32>) -> labalaba_shared::task::TaskConfig {
+        labalaba_shared::task::TaskConfig {
+            id: TaskId::new(),
+            description: "t".to_string(),
+            executable: "/bin/true".to_string(),
+            arguments: vec![],
+            working_directory: None,
+            environment: std::collections::HashMap::new(),
+            run_as_admin: false,
+            auto_restart: false,
+            schedule: None,
+            startup_delay_ms: 0,
+            depends_on: vec![],
+            runner_prefix: None,
+            pids,
+        }
+    }
+
+    #[tokio::test]
+    async fn pruned_pids_are_persisted_via_update_pids() {
+        use crate::application::dto::config_to_task;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+        drop(file);
+        let repo = YamlTaskRepository::new(path);
+
+        let config = task_with_pids(vec![100, 200, 300]);
+        let id = config.id.clone();
+        repo.save(&config_to_task(config)).await.unwrap();
+
+        // Simulate recovery deciding only 200 is alive+ours.
+        let pruned = prune_pids(&[100, 200, 300], |pid| pid == 200);
+        let to_persist = pruned.clone();
+        repo.update_pids(&id, Box::new(move |_| to_persist)).await.unwrap();
+
+        let reloaded = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(reloaded.pids, vec![200]);
+    }
+
+    #[tokio::test]
+    async fn no_survivors_persists_empty_pids() {
+        use crate::application::dto::config_to_task;
+
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_path_buf();
+        drop(file);
+        let repo = YamlTaskRepository::new(path);
+
+        let config = task_with_pids(vec![1, 2]);
+        let id = config.id.clone();
+        repo.save(&config_to_task(config)).await.unwrap();
+
+        let pruned = prune_pids(&[1, 2], |_| false);
+        let to_persist = pruned.clone();
+        repo.update_pids(&id, Box::new(move |_| to_persist)).await.unwrap();
+
+        let reloaded = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert!(reloaded.pids.is_empty());
+    }
 }

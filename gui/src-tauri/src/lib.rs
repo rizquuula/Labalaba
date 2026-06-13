@@ -96,6 +96,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::daemon::get_daemon_connection,
+            commands::service::set_autostart,
+            commands::service::get_autostart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

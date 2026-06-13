@@ -5,6 +5,7 @@
   import { theme } from '$lib/stores/theme';
   import { focusTrap } from '$lib/actions/focusTrap';
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
@@ -18,10 +19,16 @@
   const modalHeadingId = 'settings-heading';
 
   onMount(() => {
-    loadSettings().then(() => {
+    loadSettings().then(async () => {
       // Seed draft from freshly-loaded settings only once on mount,
       // using untrack so we don't re-run when settings updates later.
       untrack(() => { draft = { ...$settings }; });
+      // Sync launch_on_startup with the real OS autostart state.
+      try {
+        draft.launch_on_startup = await invoke<boolean>('get_autostart');
+      } catch {
+        // Best-effort; leave the persisted value in place on error.
+      }
     });
   });
 
@@ -51,6 +58,13 @@
       await saveSettings(draft);
       if (draft.theme !== $theme) {
         theme.set(draft.theme as 'dark' | 'light');
+      }
+      try {
+        await invoke('set_autostart', { enabled: draft.launch_on_startup });
+      } catch (e) {
+        saveError = `Settings saved, but autostart update failed: ${String(e)}`;
+        saving = false;
+        return;
       }
       onClose();
     } catch (e) {

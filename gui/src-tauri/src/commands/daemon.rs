@@ -49,7 +49,7 @@ fn daemon_name() -> &'static str {
     }
 }
 
-fn resolve_daemon_bin() -> Option<PathBuf> {
+pub(crate) fn resolve_daemon_bin() -> Option<PathBuf> {
     if let Ok(val) = std::env::var("LABALABA_DAEMON_BIN") {
         if !val.is_empty() {
             let p = PathBuf::from(val);

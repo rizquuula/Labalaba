@@ -42,6 +42,8 @@ pub struct AppState {
     /// Cron scheduler — set once after AppState is Arc-wrapped so the scheduler
     /// can hold a Weak back-reference to AppState without a cycle.
     pub scheduler: OnceLock<Arc<CronScheduler>>,
+    /// Shared secret token required on all API requests (Bearer auth).
+    pub auth_token: String,
 }
 
 impl AppState {
@@ -55,9 +57,10 @@ impl AppState {
         log_writer: LogFileWriter,
         log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
         update_event_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
+        auth_token: String,
     ) -> Arc<Self> {
         let resource_monitor = Arc::new(ResourceMonitor::new());
-        
+
         Arc::new(Self {
             task_repo,
             spawner,
@@ -73,6 +76,7 @@ impl AppState {
             update_event_callback,
             pending_update: RwLock::new(None),
             scheduler: OnceLock::new(),
+            auth_token,
         })
     }
 

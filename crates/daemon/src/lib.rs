@@ -90,11 +90,13 @@ pub async fn init_app_state(
     );
     log_writer.init_dir().await?;
 
+    let auth_token = infrastructure::auth::token::load_or_create_token(&base)?;
+
     let config_path = resolve(&base, &settings.config_path);
     let repo = Arc::new(YamlTaskRepository::new(config_path));
     let spawner = Arc::new(OsProcessSpawner);
     let updater = Arc::new(GithubUpdater::new());
-    let state = AppState::new(repo, spawner, updater, settings.clone(), settings_path.clone(), restart_tx, log_writer, log_event_callback, update_event_callback);
+    let state = AppState::new(repo, spawner, updater, settings.clone(), settings_path.clone(), restart_tx, log_writer, log_event_callback, update_event_callback, auth_token);
 
     let scheduler = Arc::new(
         CronScheduler::new(Arc::downgrade(&state))

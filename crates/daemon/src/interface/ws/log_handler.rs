@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use axum::{
-    extract::{Path, State, WebSocketUpgrade},
-    response::Response,
+    extract::{Path, Query, State, WebSocketUpgrade},
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
@@ -14,7 +16,13 @@ pub async fn handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
     Path(id_str): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Response {
+    let provided_token = params.get("token").map(|s| s.as_str()).unwrap_or("");
+    if provided_token != state.auth_token {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     let id = Uuid::parse_str(&id_str)
         .map(TaskId)
         .unwrap_or_else(|_| TaskId::new());

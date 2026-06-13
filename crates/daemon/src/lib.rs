@@ -21,12 +21,128 @@ use application::task::start_task::StartTask;
 use application::update::check_update::CheckUpdate;
 use domain::scheduler::service::SchedulerService;
 
-/// Base directory for all data files (tasks.yaml, settings.yaml, logs/).
-/// Reads `LABALABA_DATA_DIR` env var; falls back to the current working directory.
+/// Base directory for all data files (`tasks.yaml`, `settings.yaml`, `logs/`).
+///
+/// Resolution order:
+/// 1. `LABALABA_DATA_DIR` env var — when set and non-empty, use it as-is.
+///    The Makefile sets this to the repo root for `make dev`; dev behaviour is unchanged.
+/// 2. Platform per-user data directory joined with `"labalaba"`:
+///    - Linux:   `~/.local/share/labalaba`
+///    - macOS:   `~/Library/Application Support/labalaba`
+///    - Windows: `%APPDATA%\labalaba`
+/// 3. `.` (current working directory) — only if `dirs::data_dir()` returns `None`
+///    (unusual; should not happen on a normal installation).
 pub fn data_dir() -> PathBuf {
-    std::env::var("LABALABA_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    let env_val = std::env::var("LABALABA_DATA_DIR").unwrap_or_default();
+    if !env_val.is_empty() {
+        return PathBuf::from(env_val);
+    }
+    dirs::data_dir()
+        .map(|d| d.join("labalaba"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Copy a file from `src` to `dst`, creating parent directories as needed.
+/// Returns `false` (but does not abort) if `dst` already exists — never overwrites.
+fn copy_file_best_effort(src: &Path, dst: &Path) -> bool {
+    if dst.exists() {
+        return false;
+    }
+    if let Some(parent) = dst.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::copy(src, dst) {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!("migrate: failed to copy {} → {}: {}", src.display(), dst.display(), e);
+            false
+        }
+    }
+}
+
+/// Recursively copy all files from `src_dir` into `dst_dir`, preserving relative
+/// paths. Skips any entry that already exists at the destination (never overwrites).
+fn copy_dir_recursive_best_effort(src_dir: &Path, dst_dir: &Path) {
+    let entries = match std::fs::read_dir(src_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!("migrate: cannot read dir {}: {}", src_dir.display(), e);
+            return;
+        }
+    };
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        let rel = match src_path.strip_prefix(src_dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let dst_path = dst_dir.join(rel);
+        if src_path.is_dir() {
+            copy_dir_recursive_best_effort(&src_path, &dst_path);
+        } else {
+            copy_file_best_effort(&src_path, &dst_path);
+        }
+    }
+}
+
+/// Migrate data files from a legacy directory to the new platform-standard location.
+///
+/// Conditions required for migration to run:
+/// - `legacy_dir` ≠ `target` (different directories).
+/// - `target/tasks.yaml` does NOT exist (target is fresh).
+/// - `legacy_dir/tasks.yaml` DOES exist (there is something to migrate).
+///
+/// What gets copied (best-effort; failures are logged as warnings, never fatal):
+/// - `tasks.yaml`
+/// - `settings.yaml` (if present)
+/// - `logs/` directory (recursively, if present)
+///
+/// Files are **copied**, not moved.  Existing files in `target` are never overwritten.
+pub fn migrate_legacy_data_dir(legacy_dir: &Path, target: &Path) {
+    // No-op: same directory.
+    if legacy_dir == target {
+        return;
+    }
+
+    let legacy_tasks = legacy_dir.join("tasks.yaml");
+    let target_tasks = target.join("tasks.yaml");
+
+    // Only migrate when there is something in the legacy location and the target is clean.
+    if !legacy_tasks.exists() || target_tasks.exists() {
+        return;
+    }
+
+    tracing::info!(
+        "Migrating data from legacy location {} → {}",
+        legacy_dir.display(),
+        target.display()
+    );
+
+    if let Err(e) = std::fs::create_dir_all(target) {
+        tracing::warn!("migrate: could not create target dir {}: {}", target.display(), e);
+        return;
+    }
+
+    // tasks.yaml
+    if copy_file_best_effort(&legacy_tasks, &target_tasks) {
+        tracing::info!("migrate: copied tasks.yaml");
+    }
+
+    // settings.yaml (optional)
+    let legacy_settings = legacy_dir.join("settings.yaml");
+    if legacy_settings.exists() {
+        if copy_file_best_effort(&legacy_settings, &target.join("settings.yaml")) {
+            tracing::info!("migrate: copied settings.yaml");
+        }
+    }
+
+    // logs/ directory (optional)
+    let legacy_logs = legacy_dir.join("logs");
+    if legacy_logs.is_dir() {
+        let target_logs = target.join("logs");
+        copy_dir_recursive_best_effort(&legacy_logs, &target_logs);
+        tracing::info!("migrate: copied logs/");
+    }
 }
 
 /// Resolve a path that may be relative (e.g. "./tasks.yaml") against a base dir.
@@ -78,11 +194,25 @@ pub async fn init_app_state(
     log_event_callback: Option<Arc<dyn Fn(LogEntry) + Send + Sync + 'static>>,
     update_event_callback: Option<Arc<dyn Fn(UpdateInfo) + Send + Sync + 'static>>,
 ) -> anyhow::Result<Arc<AppState>> {
+    let base = data_dir();
+
+    // Ensure the data directory exists before anything tries to read from it.
+    if let Err(e) = std::fs::create_dir_all(&base) {
+        tracing::warn!("Could not create data directory {}: {}", base.display(), e);
+    }
+
+    // One-time migration: only when not in dev/override mode (env var unset).
+    let env_val = std::env::var("LABALABA_DATA_DIR").unwrap_or_default();
+    if env_val.is_empty() {
+        if let Ok(cwd) = std::env::current_dir() {
+            migrate_legacy_data_dir(&cwd, &base);
+        }
+    }
+
     let (settings, settings_path) = load_settings().await;
 
     let (restart_tx, restart_rx) = mpsc::channel::<TaskId>(64);
 
-    let base = data_dir();
     let log_writer = LogFileWriter::new(
         resolve(&base, &settings.log_dir),
         settings.log_max_file_size_mb,
@@ -507,5 +637,74 @@ mod tests {
 
         let reloaded = repo.find_by_id(&id).await.unwrap().unwrap();
         assert!(reloaded.pids.is_empty());
+    }
+
+    // --- migration tests ---
+
+    #[test]
+    fn migration_copies_files_and_logs_dir() {
+        let legacy = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+
+        // Populate legacy dir.
+        std::fs::write(legacy.path().join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(legacy.path().join("settings.yaml"), "version: 1").unwrap();
+        let logs_dir = legacy.path().join("logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        std::fs::write(logs_dir.join("task1.log"), "log line").unwrap();
+
+        // Target starts empty — tasks.yaml must not pre-exist.
+        migrate_legacy_data_dir(legacy.path(), target.path());
+
+        assert!(target.path().join("tasks.yaml").exists(), "tasks.yaml should be copied");
+        assert!(target.path().join("settings.yaml").exists(), "settings.yaml should be copied");
+        assert!(target.path().join("logs").join("task1.log").exists(), "log file should be copied");
+
+        // Content is preserved.
+        let tasks_content = std::fs::read_to_string(target.path().join("tasks.yaml")).unwrap();
+        assert_eq!(tasks_content, "tasks: []");
+    }
+
+    #[test]
+    fn migration_does_not_overwrite_existing_target_tasks_yaml() {
+        let legacy = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+
+        std::fs::write(legacy.path().join("tasks.yaml"), "tasks: [legacy]").unwrap();
+        // Pre-populate target — migration must be a no-op.
+        std::fs::write(target.path().join("tasks.yaml"), "tasks: [existing]").unwrap();
+
+        migrate_legacy_data_dir(legacy.path(), target.path());
+
+        let content = std::fs::read_to_string(target.path().join("tasks.yaml")).unwrap();
+        assert_eq!(content, "tasks: [existing]", "target must not be overwritten");
+    }
+
+    #[test]
+    fn migration_is_noop_when_legacy_has_no_tasks_yaml() {
+        let legacy = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+
+        // Legacy dir exists but has no tasks.yaml.
+        std::fs::write(legacy.path().join("settings.yaml"), "version: 1").unwrap();
+
+        migrate_legacy_data_dir(legacy.path(), target.path());
+
+        // Target must remain empty (tasks.yaml should NOT appear).
+        assert!(!target.path().join("tasks.yaml").exists());
+        assert!(!target.path().join("settings.yaml").exists());
+    }
+
+    #[test]
+    fn migration_is_noop_when_legacy_and_target_are_same_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tasks.yaml"), "tasks: []").unwrap();
+
+        // Must not panic; nothing should change.
+        migrate_legacy_data_dir(dir.path(), dir.path());
+
+        // File untouched.
+        let content = std::fs::read_to_string(dir.path().join("tasks.yaml")).unwrap();
+        assert_eq!(content, "tasks: []");
     }
 }

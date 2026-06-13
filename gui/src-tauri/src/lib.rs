@@ -10,6 +10,7 @@ use commands::{
             start_task, stop_task, restart_task, get_stats},
     settings::{get_settings, update_settings, check_update, get_pending_update},
     logs::get_logs,
+    system::detect_interpreter,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -56,6 +57,7 @@ pub fn run() {
             check_update,
             get_pending_update,
             get_logs,
+            detect_interpreter,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

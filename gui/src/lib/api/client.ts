@@ -98,6 +98,12 @@ export const api = {
     check: () => invoke<UpdateInfo>('check_update'),
     pending: () => invoke<UpdateInfo | null>('get_pending_update'),
   },
+  system: {
+    // Resolve an installed interpreter for a script kind ('sh' on macOS/Linux,
+    // 'ps1' on Windows). Returns null when none is found.
+    detectInterpreter: (kind: 'sh' | 'ps1') =>
+      invoke<string | null>('detect_interpreter', { kind }),
+  },
 };
 
 export function taskId(task: TaskDto): string {

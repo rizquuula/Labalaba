@@ -94,13 +94,41 @@
       multiple: false,
       filters: executableFilters()
     });
-    if (selected && typeof selected === 'string') {
-      executable = selected;
-      if (!workingDir) {
-        const parts = selected.replace(/\\/g, '/').split('/');
-        parts.pop();
-        workingDir = parts.join('/');
+    if (!selected || typeof selected !== 'string') return;
+
+    const norm = selected.replace(/\\/g, '/');
+    const slash = norm.lastIndexOf('/');
+    const dir = slash >= 0 ? selected.slice(0, slash) : '';
+    const fileName = slash >= 0 ? norm.slice(slash + 1) : norm;
+    const dot = fileName.lastIndexOf('.');
+    const ext = dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : '';
+    const os = detectOs();
+
+    // Shell/PowerShell scripts can't be exec'd directly — the OS needs a
+    // shebang (or file association) we can't assume — so launch them via an
+    // installed interpreter, passing the bare filename relative to the script's
+    // own directory as the working dir.
+    const kind: 'sh' | 'ps1' | null =
+      ext === 'sh' && os !== 'windows' ? 'sh'
+      : ext === 'ps1' && os === 'windows' ? 'ps1'
+      : null;
+
+    if (kind) {
+      const interpreter = await api.system.detectInterpreter(kind);
+      if (interpreter) {
+        executable = interpreter;
+        workingDir = dir;
+        argsRaw = kind === 'ps1'
+          ? `-ExecutionPolicy Bypass -File ${fileName}`
+          : fileName;
+        return;
       }
+      // No interpreter installed — fall through to selecting the script directly.
+    }
+
+    executable = selected;
+    if (!workingDir) {
+      workingDir = dir;
     }
   }
 

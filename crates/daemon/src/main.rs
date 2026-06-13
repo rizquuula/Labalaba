@@ -29,6 +29,10 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal(Arc::clone(&state)))
         .await?;
+
+    // Reached only after graceful shutdown has drained in-flight requests and
+    // log writers were flushed in shutdown_signal — the process is now exiting.
+    tracing::info!("Daemon shut down cleanly");
     Ok(())
 }
 

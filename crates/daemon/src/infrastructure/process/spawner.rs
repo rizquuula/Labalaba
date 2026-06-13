@@ -165,8 +165,10 @@ impl ProcessSpawner for OsProcessSpawner {
     async fn kill(&self, pid: u32) -> anyhow::Result<()> {
         #[cfg(target_os = "windows")]
         {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
             Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/F"])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output()
                 .await?;
         }
@@ -183,8 +185,10 @@ impl ProcessSpawner for OsProcessSpawner {
     async fn kill_tree(&self, pid: u32) -> anyhow::Result<()> {
         #[cfg(target_os = "windows")]
         {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
             Command::new("taskkill")
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output()
                 .await?;
         }

@@ -125,7 +125,14 @@ pub fn start_or_connect_daemon() -> anyhow::Result<(DaemonConnection, Option<std
             )
         })?;
 
-        let child = std::process::Command::new(bin).spawn()?;
+        let mut cmd = std::process::Command::new(bin);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let child = cmd.spawn()?;
 
         let mut ready = false;
         for _ in 0..50 {

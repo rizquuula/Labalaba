@@ -164,6 +164,10 @@ const REG_KEY: &str =
     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 #[cfg(target_os = "windows")]
 const REG_VALUE: &str = "Labalaba Daemon";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 #[cfg(target_os = "windows")]
 fn install_autostart(daemon_path: &Path) -> std::io::Result<()> {
@@ -180,6 +184,7 @@ fn install_autostart(daemon_path: &Path) -> std::io::Result<()> {
         .arg("/d")
         .arg(daemon_path)
         .arg("/f")
+        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
@@ -196,6 +201,7 @@ fn install_autostart(daemon_path: &Path) -> std::io::Result<()> {
 fn uninstall_autostart() -> std::io::Result<()> {
     let _ = std::process::Command::new("reg")
         .args(["delete", REG_KEY, "/v", REG_VALUE, "/f"])
+        .creation_flags(CREATE_NO_WINDOW)
         .status();
     Ok(())
 }
@@ -204,6 +210,7 @@ fn uninstall_autostart() -> std::io::Result<()> {
 fn check_installed() -> bool {
     std::process::Command::new("reg")
         .args(["query", REG_KEY, "/v", REG_VALUE])
+        .creation_flags(CREATE_NO_WINDOW)
         .status()
         .map(|s| s.success())
         .unwrap_or(false)

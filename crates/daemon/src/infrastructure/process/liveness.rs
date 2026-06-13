@@ -107,7 +107,9 @@ fn process_identity_matches(_pid: u32, _expected_stem: &str) -> bool {
 /// an exact PID match, or `None` if the PID is absent.
 #[cfg(target_os = "windows")]
 fn query_tasklist(pid: u32) -> Option<String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let output = Command::new("tasklist")
         .args([
             "/FI",
@@ -116,6 +118,7 @@ fn query_tasklist(pid: u32) -> Option<String> {
             "CSV",
             "/NH",
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);

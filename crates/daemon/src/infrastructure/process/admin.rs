@@ -15,10 +15,12 @@ pub async fn spawn_as_admin(task: &Task) -> anyhow::Result<ProcessHandle> {
         args_str.replace('\'', "''"),
     );
 
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let child = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()?;
 
     let pid = child.id()

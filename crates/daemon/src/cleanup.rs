@@ -62,6 +62,29 @@ pub async fn stop_running_daemon() -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Probe a possibly-running daemon's public `/api/health` endpoint and return
+/// the version it reports, or `None` if nothing answered within a short window.
+/// `None` covers "unreachable", "a foreign process holds the port", and "a
+/// daemon that accepts the connection but is mid-teardown and never replies".
+/// Used by the GUI to decide whether a daemon already on the port is a healthy,
+/// current-version daemon worth reusing — versus one that must be reclaimed.
+pub async fn daemon_health(port: u16) -> Option<String> {
+    let url = format!("http://127.0.0.1:{port}/api/health");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    body.get("data")?
+        .get("version")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 fn is_connection_refused(e: &reqwest::Error) -> bool {
     use std::error::Error as StdError;
     // Walk the error chain looking for a ConnectionRefused io error.

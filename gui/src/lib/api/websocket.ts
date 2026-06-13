@@ -1,4 +1,4 @@
-import { getConnection } from './client';
+import { getConnection, fetchWithTimeout } from './client';
 
 export interface LogEntry {
   task_id: string;
@@ -88,7 +88,7 @@ export async function fetchHistoricalLogs(
 ): Promise<LogEntry[]> {
   try {
     const conn = await getConnection();
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${conn.base_url}/api/logs/${taskId}?lines=${lines}&offset=${offset}`,
       { headers: { Authorization: `Bearer ${conn.token}` } },
     );

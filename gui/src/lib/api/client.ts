@@ -102,6 +102,26 @@ export function getConnection(): Promise<DaemonConnection> {
   return connectionPromise;
 }
 
+/** Default request timeout. Without this a daemon that accepts the TCP
+ * connection but never answers (e.g. one being torn down by an installer during
+ * an upgrade) would hang `fetch` forever, freezing the UI on its loading state.
+ * A bounded request fails to a visible, retryable error instead. */
+const REQUEST_TIMEOUT_MS = 10000;
+
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
   const conn = await getConnection();
   const headers: Record<string, string> = {
@@ -113,13 +133,14 @@ async function apiFetch<T>(method: string, path: string, body?: unknown): Promis
 
   let response: Response;
   try {
-    response = await fetch(conn.base_url + path, {
+    response = await fetchWithTimeout(conn.base_url + path, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
-    throw new Error(`Network error: ${err}`);
+    const aborted = err instanceof DOMException && err.name === 'AbortError';
+    throw new Error(aborted ? 'daemon did not respond (request timed out)' : `Network error: ${err}`);
   }
 
   const json: ApiResponse<T> = await response.json();

@@ -9,6 +9,8 @@ use crate::application::task::{
     create_task::CreateTask, delete_task::DeleteTask, edit_task::EditTask,
     restart_task::RestartTask, start_task::StartTask, stop_task::StopTask,
 };
+use crate::domain::scheduler::service::SchedulerService;
+use crate::domain::task::entity::Task;
 use crate::domain::task::status::TaskRuntimeState;
 use crate::infrastructure::state::AppState;
 use labalaba_shared::task::TaskStatus;
@@ -21,6 +23,32 @@ fn ok<T: serde::Serialize>(data: T) -> Resp<T> {
 
 fn err<T>(msg: impl Into<String>, code: StatusCode) -> Resp<T> {
     (code, Json(ApiResponse::err(msg)))
+}
+
+/// Register or clear a cron schedule for a task based on its current config.
+/// If the task has a schedule, registers it (replacing any existing handle);
+/// if not, removes any existing handle. No-ops safely when the scheduler is
+/// not yet initialized.
+async fn apply_schedule(state: &Arc<AppState>, task: &Task) {
+    let Some(scheduler) = state.scheduler.get() else { return };
+    if let Some(ref sched) = task.schedule {
+        if let Err(e) = scheduler.schedule(task.id.clone(), &sched.cron).await {
+            tracing::warn!("apply_schedule: invalid cron for task {}: {}", task.id, e);
+        }
+    } else {
+        if let Err(e) = scheduler.unschedule(&task.id).await {
+            tracing::warn!("apply_schedule: unschedule failed for task {}: {}", task.id, e);
+        }
+    }
+}
+
+/// Remove any cron schedule for the given task id.
+/// No-ops safely when the scheduler is not yet initialized.
+async fn clear_schedule(state: &Arc<AppState>, id: &TaskId) {
+    let Some(scheduler) = state.scheduler.get() else { return };
+    if let Err(e) = scheduler.unschedule(id).await {
+        tracing::warn!("clear_schedule: unschedule failed for task {}: {}", id, e);
+    }
 }
 
 pub async fn list(State(state): State<Arc<AppState>>) -> Resp<Vec<TaskDto>> {
@@ -64,6 +92,7 @@ pub async fn create(
     let uc = CreateTask { repo: Arc::clone(&state.task_repo) };
     match uc.execute(req).await {
         Ok(task) => {
+            apply_schedule(&state, &task).await;
             let rt = TaskRuntimeState::default();
             ok(task_to_dto(&task, &rt, &state).await)
         }
@@ -83,6 +112,7 @@ pub async fn update(
     let uc = EditTask { repo: Arc::clone(&state.task_repo) };
     match uc.execute(id.clone(), req).await {
         Ok(task) => {
+            apply_schedule(&state, &task).await;
             let states = state.runtime_states.read().await;
             let rt = states.get(&id).cloned().unwrap_or_default();
             ok(task_to_dto(&task, &rt, &state).await)
@@ -99,9 +129,14 @@ pub async fn remove(
         return err("Invalid task ID", StatusCode::BAD_REQUEST);
     };
     let id = TaskId(uuid);
+    // Clone id before moving it into DeleteTask so we can still unschedule.
+    let id_for_sched = id.clone();
     let uc = DeleteTask { repo: Arc::clone(&state.task_repo), log_writer: state.log_writer.clone() };
     match uc.execute(id).await {
-        Ok(()) => ok(()),
+        Ok(()) => {
+            clear_schedule(&state, &id_for_sched).await;
+            ok(())
+        }
         Err(e) => err(e.to_string(), StatusCode::NOT_FOUND),
     }
 }
@@ -175,9 +210,9 @@ pub async fn get_task_stats(
         return err("Invalid task ID", StatusCode::BAD_REQUEST);
     };
     let id = TaskId(uuid);
-    
+
     let usage = state.resource_monitor.get_usage(&id).await;
-    
+
     match usage {
         Some((cpu_percent, memory_bytes)) => {
             ok(TaskResourceStats {

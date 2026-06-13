@@ -12,12 +12,14 @@ use infrastructure::{
     persistence::yaml_repository::YamlTaskRepository,
     process::spawner::OsProcessSpawner,
     process::liveness::{expected_process_stem, is_task_process_alive},
+    scheduler::cron_scheduler::CronScheduler,
     updater::github_updater::GithubUpdater,
     state::AppState,
     log::file_writer::LogFileWriter,
 };
 use application::task::start_task::StartTask;
 use application::update::check_update::CheckUpdate;
+use domain::scheduler::service::SchedulerService;
 
 /// Base directory for all data files (tasks.yaml, settings.yaml, logs/).
 /// Reads `LABALABA_DATA_DIR` env var; falls back to the current working directory.
@@ -94,6 +96,11 @@ pub async fn init_app_state(
     let updater = Arc::new(GithubUpdater::new());
     let state = AppState::new(repo, spawner, updater, settings.clone(), settings_path.clone(), restart_tx, log_writer, log_event_callback, update_event_callback);
 
+    let scheduler = Arc::new(
+        CronScheduler::new(Arc::downgrade(&state))
+    );
+    let _ = state.scheduler.set(scheduler);
+
     // Save settings to file if it doesn't exist
     if !std::path::Path::new(&settings_path).exists() {
         if let Err(e) = state.save_settings().await {
@@ -102,6 +109,7 @@ pub async fn init_app_state(
     }
 
     recover_task_states(Arc::clone(&state)).await;
+    schedule_existing_tasks(&state).await;
     tokio::spawn(restart_loop(restart_rx, Arc::clone(&state)));
 
     // Always spawn the update checker; it re-reads `auto_check_updates` each
@@ -111,6 +119,33 @@ pub async fn init_app_state(
     spawn_update_checker(Arc::clone(&state), callback);
 
     Ok(state)
+}
+
+/// Schedule all tasks that have a cron expression defined.
+/// Called once after `recover_task_states` so tasks whose cron fires while the
+/// daemon was down are not retroactively triggered — they simply wait for the
+/// next scheduled instant. A single invalid expression is logged and skipped so
+/// it never prevents other tasks from being scheduled.
+async fn schedule_existing_tasks(state: &Arc<AppState>) {
+    let tasks = match state.task_repo.find_all().await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("schedule_existing_tasks: failed to load tasks: {}", e);
+            return;
+        }
+    };
+    let Some(scheduler) = state.scheduler.get() else { return };
+    for task in tasks {
+        if let Some(sched) = task.schedule {
+            if let Err(e) = scheduler.schedule(task.id.clone(), &sched.cron).await {
+                tracing::warn!(
+                    "schedule_existing_tasks: invalid cron for task {}: {}",
+                    task.id,
+                    e
+                );
+            }
+        }
+    }
 }
 
 /// Receives restart requests from crashed tasks and re-executes them.

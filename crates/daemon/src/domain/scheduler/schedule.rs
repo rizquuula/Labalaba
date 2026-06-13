@@ -1,18 +1,39 @@
 use cron::Schedule as CronSchedule;
 use std::str::FromStr;
 
-/// Validated cron schedule value object
-#[allow(dead_code)]
+/// Validated cron schedule value object.
+///
+/// Accepts both 5-field standard cron (`min hour dom month dow`) and the
+/// 6-field form required by the `cron` crate (`sec min hour dom month dow`).
+/// 5-field input is normalized by prepending a `0` seconds field before
+/// parsing; `self.expression` always stores the ORIGINAL input string.
+/// Day-of-week follows the `cron` crate's interpretation; no DOW remapping
+/// is performed here.
 #[derive(Debug, Clone)]
 pub struct ValidatedSchedule {
     pub expression: String,
     inner: CronSchedule,
 }
 
-#[allow(dead_code)]
+/// Normalize a cron expression from 5-field to 6-field format.
+///
+/// The `cron` crate requires 6 fields (`sec min hour dom month dow`).
+/// Classic cron uses 5 fields (`min hour dom month dow`). If `expr` has
+/// exactly 5 whitespace-delimited fields, `"0 "` is prepended so the seconds
+/// field is fixed at zero. Any other field count is returned unchanged.
+pub(crate) fn normalize_cron(expr: &str) -> String {
+    let fields: Vec<&str> = expr.split_whitespace().collect();
+    if fields.len() == 5 {
+        format!("0 {}", expr)
+    } else {
+        expr.to_string()
+    }
+}
+
 impl ValidatedSchedule {
     pub fn parse(expr: &str) -> anyhow::Result<Self> {
-        let inner = CronSchedule::from_str(expr)
+        let normalized = normalize_cron(expr);
+        let inner = CronSchedule::from_str(&normalized)
             .map_err(|e| anyhow::anyhow!("Invalid cron expression '{}': {}", expr, e))?;
         Ok(Self {
             expression: expr.to_string(),
@@ -115,5 +136,58 @@ mod tests {
             let schedule = ValidatedSchedule::parse(expr).unwrap();
             assert_eq!(schedule.expression, expr);
         }
+    }
+
+    // New tests for 5-field support
+
+    #[test]
+    fn test_5field_every_5_minutes_parses() {
+        let result = ValidatedSchedule::parse("*/5 * * * *");
+        assert!(result.is_ok(), "5-field '*/5 * * * *' should parse OK");
+        let schedule = result.unwrap();
+        assert_eq!(schedule.expression, "*/5 * * * *");
+        assert!(schedule.next_run().is_some());
+    }
+
+    #[test]
+    fn test_5field_weekdays_9am_parses() {
+        let result = ValidatedSchedule::parse("0 9 * * 1-5");
+        assert!(result.is_ok(), "5-field '0 9 * * 1-5' should parse OK");
+        let schedule = result.unwrap();
+        assert_eq!(schedule.expression, "0 9 * * 1-5");
+        assert!(schedule.next_run().is_some());
+    }
+
+    #[test]
+    fn test_6field_still_parses() {
+        let result = ValidatedSchedule::parse("0 */5 * * * *");
+        assert!(result.is_ok(), "6-field should still parse");
+    }
+
+    #[test]
+    fn test_4field_still_errors() {
+        let result = ValidatedSchedule::parse("* * * *");
+        assert!(result.is_err(), "4-field should still error");
+    }
+
+    #[test]
+    fn test_empty_still_errors() {
+        let result = ValidatedSchedule::parse("");
+        assert!(result.is_err(), "empty string should still error");
+    }
+
+    // Direct normalize_cron tests
+
+    #[test]
+    fn normalize_5field_prepends_zero_seconds() {
+        let result = normalize_cron("*/5 * * * *");
+        assert_eq!(result, "0 */5 * * * *");
+    }
+
+    #[test]
+    fn normalize_6field_unchanged() {
+        let expr = "0 */5 * * * *";
+        let result = normalize_cron(expr);
+        assert_eq!(result, expr);
     }
 }

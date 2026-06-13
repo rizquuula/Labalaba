@@ -4,12 +4,13 @@ use crate::domain::task::repository::TaskRepository;
 use crate::domain::task::status::TaskRuntimeState;
 use crate::infrastructure::log::file_writer::LogFileWriter;
 use crate::infrastructure::process::resource_monitor::ResourceMonitor;
+use crate::infrastructure::scheduler::cron_scheduler::CronScheduler;
 use crate::infrastructure::updater::github_updater::GithubUpdater;
 use labalaba_shared::api::{LogEntry, UpdateInfo};
 use labalaba_shared::settings::AppSettings;
 use labalaba_shared::task::TaskId;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::{mpsc, RwLock};
 
 /// Shared application state passed to all HTTP handlers and use cases.
@@ -38,6 +39,9 @@ pub struct AppState {
     /// Latest update found by a background check, stored so the frontend can pull
     /// it on mount even if it registered its listener after the event fired.
     pub pending_update: RwLock<Option<UpdateInfo>>,
+    /// Cron scheduler — set once after AppState is Arc-wrapped so the scheduler
+    /// can hold a Weak back-reference to AppState without a cycle.
+    pub scheduler: OnceLock<Arc<CronScheduler>>,
 }
 
 impl AppState {
@@ -68,6 +72,7 @@ impl AppState {
             log_event_callback,
             update_event_callback,
             pending_update: RwLock::new(None),
+            scheduler: OnceLock::new(),
         })
     }
 

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -9,15 +9,13 @@ use crate::domain::scheduler::service::SchedulerService;
 use crate::infrastructure::state::AppState;
 use crate::application::task::start_task::StartTask;
 
-#[allow(dead_code)]
 pub struct CronScheduler {
     handles: RwLock<HashMap<TaskId, JoinHandle<()>>>,
-    state: Arc<AppState>,
+    state: Weak<AppState>,
 }
 
-#[allow(dead_code)]
 impl CronScheduler {
-    pub fn new(state: Arc<AppState>) -> Self {
+    pub fn new(state: Weak<AppState>) -> Self {
         Self { handles: RwLock::new(HashMap::new()), state }
     }
 }
@@ -26,8 +24,13 @@ impl CronScheduler {
 impl SchedulerService for CronScheduler {
     async fn schedule(&self, task_id: TaskId, cron_expr: &str) -> anyhow::Result<()> {
         let schedule = ValidatedSchedule::parse(cron_expr)?;
-        let state = Arc::clone(&self.state);
+        let state_weak = self.state.clone();
         let id = task_id.clone();
+
+        // Abort any existing handle for this task before replacing it.
+        if let Some(old) = self.handles.write().await.remove(&task_id) {
+            old.abort();
+        }
 
         let handle = tokio::spawn(async move {
             loop {
@@ -35,6 +38,7 @@ impl SchedulerService for CronScheduler {
                 let delay = (next - chrono::Utc::now()).to_std()
                     .unwrap_or(std::time::Duration::from_secs(1));
                 tokio::time::sleep(delay).await;
+                let Some(state) = state_weak.upgrade() else { break };
                 let uc = StartTask { state: Arc::clone(&state) };
                 if let Err(e) = uc.execute(id.clone()).await {
                     tracing::warn!("Scheduled start of {} failed: {}", id, e);

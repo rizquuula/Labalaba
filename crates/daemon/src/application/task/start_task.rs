@@ -148,6 +148,17 @@ impl StartTask {
 
             let _ = log_writer.close(&id_clone).await;
 
+            // The process owning `pid` has exited, so drop it from the persisted
+            // PID list (mirrors recovery_exit_watcher). Without this, frequently
+            // re-run short-lived tasks — e.g. a cron-scheduled one-shot — would
+            // accumulate dead PIDs in tasks.yaml until the next daemon restart.
+            let _ = state_clone
+                .task_repo
+                .update_pids(&id_clone, Box::new(move |pids| {
+                    pids.into_iter().filter(|&p| p != pid).collect()
+                }))
+                .await;
+
             match action {
                 Action::Intentional => {
                     tracing::info!("Task {} exited intentionally (code {:?})", id_clone, exit_code);

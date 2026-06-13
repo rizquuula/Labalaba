@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt};
 use labalaba_daemon::{init_app_state, interface::http::router};
+use labalaba_daemon::infrastructure::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,6 +26,31 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!("Labalaba daemon listening on http://{}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(Arc::clone(&state)))
+        .await?;
     Ok(())
+}
+
+async fn shutdown_signal(state: Arc<AppState>) {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received Ctrl-C, shutting down");
+            }
+            _ = sigterm.recv() => {
+                tracing::info!("Received SIGTERM, shutting down");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Received Ctrl-C, shutting down");
+    }
+    state.shutdown().await;
 }

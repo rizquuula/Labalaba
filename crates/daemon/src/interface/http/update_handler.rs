@@ -14,3 +14,8 @@ pub async fn check(State(state): State<Arc<AppState>>) -> Resp<UpdateInfo> {
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::err(e.to_string()))),
     }
 }
+
+pub async fn pending(State(state): State<Arc<AppState>>) -> Resp<Option<UpdateInfo>> {
+    let info = state.pending_update.read().await.clone();
+    (StatusCode::OK, Json(ApiResponse::ok(info)))
+}

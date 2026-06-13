@@ -1,5 +1,7 @@
+use super::health_handler as health;
 use super::logs_handler as logs;
 use super::settings_handler as settings;
+use super::system_handler as system;
 use super::task_handler as tasks;
 use super::update_handler as updates;
 use crate::infrastructure::state::AppState;
@@ -33,6 +35,12 @@ pub fn build(state: Arc<AppState>) -> Router {
         )
         // Updates
         .route("/api/update/check", routing::post(updates::check))
+        .route("/api/update/pending", routing::get(updates::pending))
+        // Health / version
+        .route("/api/health", routing::get(health::health))
+        .route("/api/app/version", routing::get(health::version))
+        // System utilities
+        .route("/api/system/detect-interpreter", routing::post(system::detect))
         // Historical logs
         .route("/api/logs/{id}", routing::get(logs::handler))
         // WebSocket log stream

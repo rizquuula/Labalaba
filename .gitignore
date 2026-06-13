@@ -2,6 +2,7 @@
 /node_modules
 gui/node_modules
 gui/src-tauri/target
+gui/src-tauri/binaries/
 *.log
 .env
 dist/

@@ -1,30 +1,34 @@
-.PHONY: dev stop release-windows release-linux release-mac build-be check install cargo-check test clean tree version help
+.PHONY: dev stop release-windows release-linux release-mac build-be sidecar sidecar-dev check install cargo-check test clean tree version help
 
 .DEFAULT_GOAL := help
 
-VERSION := $(shell node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync('gui/src-tauri/tauri.conf.json')).version)")
+VERSION     := $(shell node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync('gui/src-tauri/tauri.conf.json')).version)")
+TARGET_DIR  := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/target)
+HOST_TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
 
 # - Dev ---------------------------------
 
-dev: ## Start Tauri app (daemon + GUI with hot-reload)
-	cd gui && LABALABA_DATA_DIR="$(CURDIR)" npm run tauri dev
+dev: sidecar-dev ## Start Tauri app (daemon + GUI with hot-reload)
+	cd gui && LABALABA_DATA_DIR="$(CURDIR)" LABALABA_DAEMON_BIN="$(TARGET_DIR)/debug/labalaba-daemon" npm run tauri dev
 
 stop: ## Kill all dev processes (daemon + Tauri)
 	@powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
 
+# NOTE: release-windows requires gui/src-tauri/binaries/labalaba-daemon-<triple>.exe staged first.
+# CI handles staging via the "Build daemon sidecar" step in release.yml.
 release-windows: ## Build Tauri release for Windows → dist/labalaba-v$(VERSION).exe
 	cd gui && npm run tauri build
 	@mkdir -p dist
 	cp gui/src-tauri/target/release/labalaba-gui.exe dist/labalaba-v$(VERSION).exe
 	@echo "Output: dist/labalaba-v$(VERSION).exe"
 
-release-linux: ## Build Tauri release for Linux → dist/labalaba-v$(VERSION)
+release-linux: sidecar ## Build Tauri release for Linux → dist/labalaba-v$(VERSION)
 	cd gui && npm run tauri build
 	@mkdir -p dist
 	cp gui/src-tauri/target/release/labalaba-gui dist/labalaba-v$(VERSION)
 	@echo "Output: dist/labalaba-v$(VERSION)"
 
-release-mac: ## Build Tauri release for macOS → dist/labalaba-v$(VERSION).app
+release-mac: sidecar ## Build Tauri release for macOS → dist/labalaba-v$(VERSION).app
 	cd gui && npm run tauri build
 	@mkdir -p dist
 	cp -r gui/src-tauri/target/release/bundle/macos/labalaba-gui.app dist/labalaba-v$(VERSION).app
@@ -32,6 +36,16 @@ release-mac: ## Build Tauri release for macOS → dist/labalaba-v$(VERSION).app
 
 build-be: ## Build backend only (release)
 	cargo build -p labalaba-daemon --release
+
+sidecar: ## Build the daemon and stage it as a Tauri sidecar (release, host target)
+	cargo build -p labalaba-daemon --release
+	@mkdir -p gui/src-tauri/binaries
+	cp "$(TARGET_DIR)/release/labalaba-daemon" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)"
+
+sidecar-dev: ## Build the daemon (debug) and stage it as a sidecar for `tauri dev`
+	cargo build -p labalaba-daemon
+	@mkdir -p gui/src-tauri/binaries
+	cp "$(TARGET_DIR)/debug/labalaba-daemon" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)"
 
 check: ## Svelte + TypeScript validation
 	cd gui && npm run check

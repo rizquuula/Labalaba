@@ -92,6 +92,19 @@ jobs:
         working-directory: gui
         run: npm install
 
+      - name: Build daemon sidecar
+        shell: bash
+        run: |
+          cargo build -p labalaba-daemon --release --target ${{ matrix.target }}
+          mkdir -p gui/src-tauri/binaries
+          SRC="target/${{ matrix.target }}/release/labalaba-daemon"
+          DEST="gui/src-tauri/binaries/labalaba-daemon-${{ matrix.target }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "${SRC}.exe" "${DEST}.exe"
+          else
+            cp "$SRC" "$DEST"
+          fi
+
       - name: Build and upload to release
         uses: tauri-apps/tauri-action@v0
         env:

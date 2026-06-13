@@ -6,6 +6,7 @@
   import { focusTrap } from '$lib/actions/focusTrap';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
@@ -15,6 +16,13 @@
   let checkingUpdate = $state(false);
   let updateError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
+
+  // Danger Zone state
+  let purgeData = $state(false);
+  let showCleanupConfirm = $state(false);
+  let cleaning = $state(false);
+  let cleanupDone = $state<string | null>(null);
+  let cleanupError = $state<string | null>(null);
 
   const modalHeadingId = 'settings-heading';
 
@@ -84,6 +92,20 @@
       updateError = String(e);
     } finally {
       checkingUpdate = false;
+    }
+  }
+
+  async function runCleanup() {
+    cleaning = true;
+    cleanupError = null;
+    try {
+      await invoke('cleanup_daemon', { purge: purgeData });
+      showCleanupConfirm = false;
+      cleanupDone = purgeData ? 'All data deleted.' : 'Background service removed.';
+    } catch (e) {
+      cleanupError = String(e);
+    } finally {
+      cleaning = false;
     }
   }
 </script>
@@ -241,6 +263,44 @@
           {/if}
         </div>
       </section>
+
+      <!-- Danger Zone -->
+      <section class="settings-section danger-zone">
+        <h3 class="section-heading danger-heading">Danger Zone</h3>
+        <p class="setting-desc danger-desc">
+          Removing the background service stops the daemon and removes its autostart entry.
+          The app keeps running but schedules and auto-restart won't work until you start the daemon again.
+        </p>
+
+        <div class="setting-row">
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-purge-data">Also delete all tasks, settings, and logs</p>
+            <p class="setting-desc danger-note">This permanently erases your data and cannot be undone.</p>
+          </div>
+          <label class="toggle" aria-labelledby="label-purge-data">
+            <input type="checkbox" bind:checked={purgeData} disabled={cleaning} />
+            <span class="toggle-track"></span>
+          </label>
+        </div>
+
+        {#if cleanupDone}
+          <p class="cleanup-done">{cleanupDone}</p>
+        {/if}
+
+        {#if cleanupError}
+          <p class="cleanup-error">{cleanupError}</p>
+        {/if}
+
+        <div class="danger-action">
+          <button
+            class="btn btn-danger"
+            onclick={() => { showCleanupConfirm = true; cleanupDone = null; cleanupError = null; }}
+            disabled={cleaning || saving}
+          >
+            Remove Background Service
+          </button>
+        </div>
+      </section>
     </div>
 
     <div class="modal-footer">
@@ -254,6 +314,19 @@
     </div>
   </div>
 </div>
+
+{#if showCleanupConfirm}
+  <ConfirmDialog
+    variant="danger"
+    title="Remove background service?"
+    message={purgeData
+      ? 'This stops the daemon, removes autostart, and PERMANENTLY DELETES all tasks, settings, and logs. This cannot be undone.'
+      : 'This stops the daemon and removes its autostart entry. Your tasks and settings are kept.'}
+    confirmText={purgeData ? 'Delete everything' : 'Remove service'}
+    onConfirm={runCleanup}
+    onCancel={() => { showCleanupConfirm = false; }}
+  />
+{/if}
 
 <style>
   .modal-header {
@@ -350,5 +423,40 @@
     margin-right: auto;
     font-size: 0.8125rem;
     color: var(--status-crashed);
+  }
+
+  .danger-zone {
+    border: 1px solid color-mix(in srgb, var(--status-crashed) 30%, transparent);
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-top: 0.5rem;
+  }
+
+  .danger-heading {
+    color: var(--status-crashed);
+  }
+
+  .danger-desc {
+    margin-bottom: 0.5rem;
+  }
+
+  .danger-note {
+    color: var(--status-crashed);
+  }
+
+  .danger-action {
+    padding-top: 0.5rem;
+  }
+
+  .cleanup-done {
+    font-size: 0.8125rem;
+    color: var(--status-running, #4ade80);
+    margin-top: 0.25rem;
+  }
+
+  .cleanup-error {
+    font-size: 0.8125rem;
+    color: var(--status-crashed);
+    margin-top: 0.25rem;
   }
 </style>

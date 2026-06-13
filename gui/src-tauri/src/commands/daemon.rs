@@ -53,6 +53,15 @@ pub fn start_daemon(state: tauri::State<'_, DaemonHandle>) -> Result<(), String>
 }
 
 #[tauri::command]
+pub fn cleanup_daemon(state: tauri::State<'_, DaemonHandle>, purge: bool) -> Result<(), String> {
+    let res = tauri::async_runtime::block_on(labalaba_daemon::cleanup(purge)).map_err(|e| e.to_string());
+    // The daemon has been told to stop; drop our stale child handle so the Exit
+    // handler doesn't later try to kill a dead pid.
+    if let Some(mut old) = state.child.lock().unwrap().take() { let _ = old.try_wait(); }
+    res
+}
+
+#[tauri::command]
 pub fn get_daemon_connection(
     state: tauri::State<'_, DaemonHandle>,
 ) -> Result<DaemonConnection, String> {

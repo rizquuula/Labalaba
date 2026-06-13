@@ -98,6 +98,7 @@ pub fn run() {
             commands::daemon::get_daemon_connection,
             commands::daemon::daemon_status,
             commands::daemon::start_daemon,
+            commands::daemon::cleanup_daemon,
             commands::service::set_autostart,
             commands::service::get_autostart,
         ])

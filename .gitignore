@@ -15,5 +15,6 @@ dist/
 AGENTS.md
 
 tasks.yaml
+daemon.token
 scripts/transfer.ps1
 opencode.json

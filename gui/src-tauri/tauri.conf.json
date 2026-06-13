@@ -31,6 +31,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/labalaba-daemon"]
+    "externalBin": ["binaries/labalaba-daemon"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "preRemoveScript": "deb/prerm.sh"
+      }
+    }
   }
 }

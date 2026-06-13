@@ -99,9 +99,9 @@ export const api = {
     pending: () => invoke<UpdateInfo | null>('get_pending_update'),
   },
   system: {
-    // Resolve an installed interpreter for a script kind ('sh' on macOS/Linux,
-    // 'ps1' on Windows). Returns null when none is found.
-    detectInterpreter: (kind: 'sh' | 'ps1') =>
+    // Resolve an installed interpreter for a script kind. 'sh'/'bash'/'zsh' on
+    // macOS/Linux; 'ps1'/'bat' on Windows. Returns null when none is found.
+    detectInterpreter: (kind: 'sh' | 'bash' | 'zsh' | 'ps1' | 'bat') =>
       invoke<string | null>('detect_interpreter', { kind }),
   },
 };

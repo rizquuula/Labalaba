@@ -104,22 +104,26 @@
     const ext = dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : '';
     const os = detectOs();
 
-    // Shell/PowerShell scripts can't be exec'd directly — the OS needs a
+    // Shell/PowerShell/batch scripts can't be exec'd directly — the OS needs a
     // shebang (or file association) we can't assume — so launch them via an
     // installed interpreter, passing the bare filename relative to the script's
     // own directory as the working dir.
-    const kind: 'sh' | 'ps1' | null =
-      ext === 'sh' && os !== 'windows' ? 'sh'
-      : ext === 'ps1' && os === 'windows' ? 'ps1'
-      : null;
+    const unixKinds: Record<string, 'sh' | 'bash' | 'zsh'> = {
+      sh: 'sh', command: 'sh', bash: 'bash', zsh: 'zsh'
+    };
+    const winKinds: Record<string, 'ps1' | 'bat'> = {
+      ps1: 'ps1', cmd: 'bat', bat: 'bat'
+    };
+    const kind = os === 'windows' ? (winKinds[ext] ?? null) : (unixKinds[ext] ?? null);
 
     if (kind) {
       const interpreter = await api.system.detectInterpreter(kind);
       if (interpreter) {
         executable = interpreter;
         workingDir = dir;
-        argsRaw = kind === 'ps1'
-          ? `-ExecutionPolicy Bypass -File ${fileName}`
+        argsRaw =
+          kind === 'ps1' ? `-ExecutionPolicy Bypass -File ${fileName}`
+          : kind === 'bat' ? `/c ${fileName}`
           : fileName;
         return;
       }

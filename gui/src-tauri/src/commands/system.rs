@@ -31,16 +31,27 @@ fn which(candidates: &[&str]) -> Option<String> {
 
 /// Resolve the interpreter used to launch a script of the given `kind`.
 ///
-/// `kind` is `"sh"` (POSIX shell scripts on macOS/Linux) or `"ps1"`
-/// (PowerShell scripts on Windows). Returns the resolved interpreter path, or
-/// `None` when the kind is unknown or no matching interpreter is installed.
+/// `kind` selects the candidate interpreters, ordered by preference and
+/// matched to the script extension where it matters (a `.zsh` prefers `zsh`),
+/// always falling back to a more universal shell. Returns the resolved
+/// interpreter path, or `None` when the kind is unknown or none is installed.
 #[tauri::command]
 pub fn detect_interpreter(kind: String) -> Option<String> {
     match kind.as_str() {
-        // Prefer a full-featured shell, fall back to the POSIX baseline.
+        // Generic POSIX scripts (.sh, .command): prefer a full-featured shell,
+        // fall back to the POSIX baseline.
         "sh" => which(&["bash", "zsh", "sh"]),
+        // Extension names its shell; fall back through the chain if it's absent.
+        "bash" => which(&["bash", "sh"]),
+        "zsh" => which(&["zsh", "bash", "sh"]),
         // Prefer cross-platform PowerShell 7+ (pwsh), fall back to Windows PowerShell.
         "ps1" => which(&["pwsh", "powershell"]),
+        // Batch files run through the command interpreter; ComSpec is its
+        // canonical path, with a PATH lookup as a fallback.
+        "bat" => std::env::var("ComSpec")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .or_else(|| which(&["cmd"])),
         _ => None,
     }
 }

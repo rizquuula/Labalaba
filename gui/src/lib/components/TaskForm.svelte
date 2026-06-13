@@ -28,10 +28,21 @@
     )
   );
 
-  let scriptType = $state<'binary' | 'python'>(untrack(() => task?.config.runner_prefix ? 'python' : 'binary'));
-  let runnerPrefix = $state(untrack(() => task?.config.runner_prefix ?? 'python'));
-  let customRunner = $state('');
   const runnerPresets = ['python', 'pythonw', 'uv run', 'pipenv run python', 'poetry run python'];
+  let runnerPrefix = $state(untrack(() => {
+    const rp = task?.config.runner_prefix;
+    if (!rp) return 'python';
+    return runnerPresets.includes(rp) ? rp : 'custom';
+  }));
+  let customRunner = $state(untrack(() => {
+    const rp = task?.config.runner_prefix;
+    return rp && !runnerPresets.includes(rp) ? rp : '';
+  }));
+
+  // A .py/.pyw executable is launched through a Python runner (runner_prefix);
+  // anything else runs directly. Derived from the path so it tracks whichever
+  // file was browsed or typed — no manual Binary/Python toggle needed.
+  const isPython = $derived(/\.pyw?$/i.test(executable.trim()));
 
   let activeTab = $state<'basic' | 'advanced'>('basic');
   let saving = $state(false);
@@ -77,12 +88,9 @@
   // binaries on macOS/Linux usually have none, so we show all files there rather
   // than hide them behind an extension filter.
   function executableFilters(): { name: string; extensions: string[] }[] | undefined {
-    if (scriptType === 'python') {
-      return [{ name: 'Python Script', extensions: ['py', 'pyw'] }];
-    }
     switch (detectOs()) {
       case 'windows':
-        return [{ name: 'Executable', extensions: ['exe', 'bat', 'cmd', 'ps1'] }];
+        return [{ name: 'Executable / Script', extensions: ['exe', 'bat', 'cmd', 'ps1', 'py', 'pyw'] }];
       default:
         // macOS / Linux: no filter so extension-less binaries remain selectable.
         return undefined;
@@ -159,7 +167,7 @@
     }
 
     // Handle runner prefix for Python scripts
-    const finalRunnerPrefix = scriptType === 'python'
+    const finalRunnerPrefix = isPython
       ? (runnerPrefix === 'custom' ? customRunner : runnerPrefix)
       : undefined;
 
@@ -206,17 +214,6 @@
       </button>
     </div>
 
-    <div class="script-type-selector">
-      <label class="radio-group">
-        <input type="radio" name="scriptType" value="binary" bind:group={scriptType} />
-        <span>Binary File</span>
-      </label>
-      <label class="radio-group">
-        <input type="radio" name="scriptType" value="python" bind:group={scriptType} />
-        <span>Python Script</span>
-      </label>
-    </div>
-
     <div class="tabs" role="tablist">
       <button
         id="tab-basic"
@@ -255,7 +252,18 @@
               placeholder="My Application" required />
           </div>
 
-          {#if scriptType === 'python'}
+          <div class="form-group full">
+            <label for="task-exe">Executable / Script Path *</label>
+            <div class="input-row">
+              <input id="task-exe" class="input" type="text" bind:value={executable}
+                placeholder="Pick a binary, .py, .sh, .ps1, .bat…" required />
+              <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
+                Browse
+              </button>
+            </div>
+          </div>
+
+          {#if isPython}
             <div class="form-group full">
               <label for="runner-prefix">Python Runner</label>
               <select id="runner-prefix" class="input" bind:value={runnerPrefix}>
@@ -264,6 +272,7 @@
                 {/each}
                 <option value="custom">Custom...</option>
               </select>
+              <small class="form-hint">Detected a Python script — it will be launched via this runner</small>
             </div>
 
             {#if runnerPrefix === 'custom'}
@@ -274,28 +283,6 @@
                 <small class="form-hint">Enter the full runner command (e.g., "uv run", "/home/user/.venv/bin/python")</small>
               </div>
             {/if}
-
-            <div class="form-group full">
-              <label for="python-script">Python Script Path *</label>
-              <div class="input-row">
-                <input id="python-script" class="input" type="text" bind:value={executable}
-                  placeholder="C:\path\to\script.py" required />
-                <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
-                  Browse
-                </button>
-              </div>
-            </div>
-          {:else}
-            <div class="form-group full">
-              <label for="task-exe">Executable Path *</label>
-              <div class="input-row">
-                <input id="task-exe" class="input" type="text" bind:value={executable}
-                  placeholder="C:\path\to\app.exe" required />
-                <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
-                  Browse
-                </button>
-              </div>
-            </div>
           {/if}
 
           <div class="form-group full">
@@ -384,25 +371,6 @@
   .modal-header h2 {
     font-size: 1.0625rem;
     font-weight: 700;
-  }
-
-  .script-type-selector {
-    display: flex;
-    gap: 1.5rem;
-    margin-bottom: 1rem;
-    padding: 0.75rem;
-    background: var(--bg-surface-hover);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-subtle);
-  }
-
-  .radio-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    cursor: pointer;
-    font-size: 0.875rem;
-    color: var(--text-primary);
   }
 
   .tabs {

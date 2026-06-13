@@ -11,7 +11,7 @@ use labalaba_shared::settings::AppSettings;
 use labalaba_shared::task::TaskId;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock};
 
 /// Shared application state passed to all HTTP handlers and use cases.
 /// Arc-wrapped for safe concurrent access across async tasks.
@@ -44,6 +44,9 @@ pub struct AppState {
     pub scheduler: OnceLock<Arc<CronScheduler>>,
     /// Shared secret token required on all API requests (Bearer auth).
     pub auth_token: String,
+    /// Fired by the `POST /api/system/shutdown` handler to request a graceful
+    /// shutdown of the daemon process (the bin's shutdown_signal awaits it).
+    pub shutdown_notify: Arc<Notify>,
 }
 
 impl AppState {
@@ -77,6 +80,7 @@ impl AppState {
             pending_update: RwLock::new(None),
             scheduler: OnceLock::new(),
             auth_token,
+            shutdown_notify: Arc::new(Notify::new()),
         })
     }
 

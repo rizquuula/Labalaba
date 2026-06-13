@@ -69,6 +69,7 @@ pub fn build(state: Arc<AppState>) -> Router {
         .route("/api/app/version", routing::get(health::version))
         // System utilities
         .route("/api/system/detect-interpreter", routing::post(system::detect))
+        .route("/api/system/shutdown", routing::post(system::shutdown))
         // Historical logs
         .route("/api/logs/{id}", routing::get(logs::handler))
         .route_layer(middleware::from_fn_with_state(

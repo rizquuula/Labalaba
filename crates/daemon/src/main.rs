@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn shutdown_signal(state: Arc<AppState>) {
+    let api_shutdown = Arc::clone(&state.shutdown_notify);
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -45,12 +46,21 @@ async fn shutdown_signal(state: Arc<AppState>) {
             _ = sigterm.recv() => {
                 tracing::info!("Received SIGTERM, shutting down");
             }
+            _ = api_shutdown.notified() => {
+                tracing::info!("Received API shutdown request, shutting down");
+            }
         }
     }
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("Received Ctrl-C, shutting down");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("Received Ctrl-C, shutting down");
+            }
+            _ = api_shutdown.notified() => {
+                tracing::info!("Received API shutdown request, shutting down");
+            }
+        }
     }
     state.shutdown().await;
 }

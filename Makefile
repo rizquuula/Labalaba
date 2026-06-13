@@ -1,4 +1,4 @@
-.PHONY: dev stop release-windows release-linux release-mac build-be check install cargo-check test clean version help
+.PHONY: dev stop release-windows release-linux release-mac build-be check install cargo-check test clean tree version help
 
 .DEFAULT_GOAL := help
 
@@ -55,6 +55,9 @@ clean: ## Remove build artifacts (target/, node_modules/, .svelte-kit/)
 	rm -rf gui/node_modules gui/.svelte-kit gui/build
 
 # - Info -----------------------------------
+
+tree: ## Print project tree with per-file line counts
+	@bash scripts/tree.sh
 
 version: ## Print the current project version
 	@echo $(VERSION)

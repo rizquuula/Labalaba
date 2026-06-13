@@ -2,6 +2,8 @@
 
 Labalaba can automatically restart a task when it crashes, so short-lived failures recover without any action from you.
 
+> **Note:** Auto-restart only runs while the **daemon is running**. The daemon runs whenever the app window is open. To keep auto-restart active after you close the window, enable **Launch at login** in Settings — see [Background Service (Daemon Mode)](./background-service.md).
+
 ## How to enable it
 
 1. Open the task form (create a new task or edit an existing one).
@@ -56,6 +58,7 @@ Auto-restart is useful for:
 - [Creating Tasks](./creating-tasks.md)
 - [Managing Tasks](./managing-tasks.md)
 - [Scheduling](./scheduling.md)
+- [Background Service (Daemon Mode)](./background-service.md)
 - [Logs](./logs.md)
 - [Troubleshooting](./troubleshooting.md)
 - [Back to Home](./README.md)

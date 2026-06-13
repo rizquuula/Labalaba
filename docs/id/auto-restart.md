@@ -2,6 +2,8 @@
 
 Labalaba dapat secara otomatis memulai ulang sebuah task ketika mengalami crash (mulai ulang otomatis), sehingga kegagalan sementara dapat pulih tanpa perlu tindakan apa pun dari Anda.
 
+> **Catatan:** Auto-restart hanya berjalan selama **daemon aktif**. Daemon berjalan selama jendela aplikasi terbuka. Agar auto-restart tetap aktif setelah Anda menutup jendela, aktifkan **Launch at login** di Settings — lihat [Layanan Latar Belakang (Mode Daemon)](./background-service.md).
+
 ## Cara mengaktifkannya
 
 1. Buka formulir task (buat task baru atau edit task yang sudah ada).
@@ -56,6 +58,7 @@ Auto-restart berguna untuk:
 - [Membuat Task](./creating-tasks.md)
 - [Mengelola Task](./managing-tasks.md)
 - [Penjadwalan](./scheduling.md)
+- [Layanan Latar Belakang (Mode Daemon)](./background-service.md)
 - [Log](./logs.md)
 - [Pemecahan Masalah](./troubleshooting.md)
 - [Kembali ke Beranda](./README.md)

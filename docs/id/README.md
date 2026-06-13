@@ -17,8 +17,8 @@ Labalaba memungkinkan Anda menjalankan, memantau, dan mengontrol program apa pun
 | 🚀 **Jalankan apa saja** | Luncurkan executable, skrip, atau aplikasi Python apa pun dengan argumen, variabel lingkungan, dan direktori kerja khusus |
 | 📋 **Task tersimpan** | Setiap task diingat antar-restart — jalankan lagi kapan saja dengan satu klik |
 | ▶️ **Kontrol siklus hidup** | Mulai, hentikan, dan mulai ulang task secara instan |
-| 🔁 **Auto-restart** | Otomatis menghidupkan kembali task yang crash (dengan jeda mundur cerdas) |
-| ⏰ **Penjadwalan** | Jalankan task sesuai jadwal cron |
+| 🔁 **Auto-restart** | Otomatis menghidupkan kembali task yang crash (dengan jeda mundur cerdas); tetap aktif saat jendela ditutup dalam mode daemon |
+| ⏰ **Penjadwalan** | Jalankan task sesuai jadwal cron 5-kolom standar; tetap aktif saat jendela ditutup dalam mode daemon |
 | 🔗 **Dependensi & jeda** | Atur urutan dan waktu mulai dengan jeda dan dependensi |
 | 🛡️ **Elevasi admin** | Jalankan task dengan hak akses Administrator (Windows) |
 | 📡 **Log langsung** | Pantau stdout/stderr mengalir dalam penampil log gaya terminal secara real-time |
@@ -42,22 +42,23 @@ Labalaba memungkinkan Anda menjalankan, memantau, dan mengontrol program apa pun
 ### ⚙️ Fitur secara mendalam
 5. [Auto-restart](./auto-restart.md) — Otomatis menjaga task yang crash tetap berjalan
 6. [Penjadwalan (Cron)](./scheduling.md) — Jalankan task sesuai jadwal
-7. [Dependensi & Jeda Mulai](./dependencies.md) — Kendalikan urutan dan waktu mulai
-8. [Elevasi Admin](./admin-elevation.md) — Jalankan task sebagai Administrator
-9. [Melihat Log](./logs.md) — Penampil log langsung dan berkas log di disk
+7. [Layanan Latar Belakang (Mode Daemon)](./background-service.md) — Jaga jadwal dan auto-restart tetap berjalan setelah Anda menutup jendela
+8. [Dependensi & Jeda Mulai](./dependencies.md) — Kendalikan urutan dan waktu mulai
+9. [Elevasi Admin](./admin-elevation.md) — Jalankan task sebagai Administrator
+10. [Melihat Log](./logs.md) — Penampil log langsung dan berkas log di disk
 
 ### 🔧 Konfigurasi & bantuan
-10. [Pengaturan](./settings.md) — Setiap pengaturan dijelaskan, beserta tema
-11. [Notifikasi & Pembaruan](./notifications-and-updates.md) — Peringatan desktop dan tetap up to date
-12. [Berkas Konfigurasi](./configuration-files.md) — `tasks.yaml`, `settings.yaml`, dan direktori data
-13. [Pemecahan Masalah](./troubleshooting.md) — Solusi untuk masalah umum
-14. [Tanya Jawab (FAQ)](./faq.md) — Pertanyaan yang sering diajukan
+11. [Pengaturan](./settings.md) — Setiap pengaturan dijelaskan, beserta tema
+12. [Notifikasi & Pembaruan](./notifications-and-updates.md) — Peringatan desktop dan tetap up to date
+13. [Berkas Konfigurasi](./configuration-files.md) — `tasks.yaml`, `settings.yaml`, dan direktori data
+14. [Pemecahan Masalah](./troubleshooting.md) — Solusi untuk masalah umum
+15. [Tanya Jawab (FAQ)](./faq.md) — Pertanyaan yang sering diajukan
 
 ---
 
 ## Tur 60 detik
 
-1. **Buka Labalaba.** Mesin latar belakang menyala otomatis di dalam aplikasi — tidak ada yang perlu dipasang atau dijalankan terpisah.
+1. **Buka Labalaba.** Daemon latar belakang menyala otomatis — tidak ada yang perlu dipasang atau dijalankan terpisah. Aplikasi hidup di system tray; menutup jendela menyembunyikannya, bukan menutup aplikasi.
 2. **Klik "New Task"**, beri nama, lalu pilih program yang akan dijalankan (binari, skrip `.py`/`.sh`/`.ps1`, apa saja).
 3. **Tekan ▶ Start.** Program Anda berjalan, dan keluarannya mengalir langsung ke penampil log.
 4. Labalaba terus memantaunya — menampilkan **CPU**, **memori**, dan **status** — serta dapat memulai ulang otomatis jika crash.

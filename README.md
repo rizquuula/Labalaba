@@ -42,39 +42,39 @@
 | 📡 **Real-time Logs** | Live terminal-style log viewer with stdout/stderr per task |
 | 🔄 **Start / Stop / Restart** | Full lifecycle control with one click |
 | 🛡️ **Admin Elevation** | Run tasks as Administrator via UAC (Windows) |
-| 🔁 **Auto-restart** | Automatically restart crashed processes |
-| ⏰ **Cron Scheduling** | Schedule tasks with cron expressions |
+| 🔁 **Auto-restart** | Automatically restart crashed processes (survives window close in daemon mode) |
+| ⏰ **Cron Scheduling** | Schedule tasks with standard 5-field cron expressions (survives window close in daemon mode) |
 | 🔗 **Task Dependencies** | Start tasks in order with configurable delays |
 | 🌓 **Light / Dark Theme** | Glassmorphism UI with smooth theme toggle |
 | 🔔 **Notifications** | Desktop alerts on crash or unexpected stop |
-| 📦 **Single Binary** | One installer — no separate daemon process to manage |
+| 🖥️ **System Tray** | Closing the window hides to the tray; use tray Quit to exit fully |
 | 📊 **Stats Bar** | Live counts of running / stopped / crashed tasks |
 
 ---
 
 ## 🏗️ Architecture
 
-Labalaba runs as a **single Tauri process** — the daemon logic is embedded directly inside the app. The frontend communicates with the Rust backend via Tauri commands and events (no HTTP, no sockets).
+Labalaba is split into two processes: a **GUI** (Tauri/SvelteKit) and a **daemon** (`labalaba-daemon`) that does the actual process management. The GUI is a thin client — it talks to the daemon over a local, token-authenticated HTTP + WebSocket connection on `127.0.0.1`. The daemon binary is bundled as a sidecar and launched automatically by the GUI.
 
 ```
-┌─────────────────────────────────────────┐
-│           Labalaba (Tauri App)           │
-│                                          │
-│  ┌───────────────────────────────────┐  │
-│  │  SvelteKit UI (WebView)           │  │  ← Svelte + TypeScript
-│  │  invoke() · listen()              │  │
-│  └──────────────┬────────────────────┘  │
-│                 │ Tauri commands/events  │
-│  ┌──────────────┴────────────────────┐  │
-│  │  Daemon Logic (Rust / tokio)      │  │  ← DDD architecture
-│  │  AppState · Use Cases             │  │    Embedded in Tauri process
-│  │  YAML persistence · Log streaming │  │
-│  └──────────────┬────────────────────┘  │
-└─────────────────┼────────────────────────┘
-                  │ std::process::Command
-         ┌────────┼────────┐
-       Task1    Task2    TaskN  ← OS processes, managed by PID
+┌─────────────────────────────┐        ┌─────────────────────────────────┐
+│     Labalaba GUI (Tauri)    │        │    labalaba-daemon (sidecar)     │
+│                             │        │                                  │
+│  ┌─────────────────────┐   │        │  AppState · Use Cases            │
+│  │  SvelteKit UI       │   │  HTTP  │  YAML persistence                │
+│  │  (WebView)          │◄──┼────────┤  Log streaming (WebSocket)       │
+│  └─────────────────────┘   │   WS   │  Cron scheduler                  │
+│                             │        │  Auto-restart loop               │
+└─────────────────────────────┘        └──────────────┬───────────────────┘
+                                                       │ std::process::Command
+                                              ┌────────┼────────┐
+                                            Task1    Task2    TaskN  ← OS processes
 ```
+
+The daemon can run in two modes:
+
+- **Session only** (default): the GUI starts the daemon as a child process and stops it on exit. Cron schedules and auto-restart are active only while the window is open.
+- **Daemon mode** (Launch at login ON): the daemon is registered as a user-level autostart service (systemd user unit on Linux, LaunchAgent on macOS, registry entry on Windows) and keeps running after the window is closed. Cron and auto-restart survive the GUI closing.
 
 The daemon logic is built with **Domain-Driven Design** (DDD):
 
@@ -83,7 +83,7 @@ crates/daemon/src/
 ├── domain/          # Entities, value objects, repository traits
 ├── application/     # One use case per file (StartTask, StopTask, …)
 ├── infrastructure/  # YAML persistence, process spawner, log collector
-└── interface/       # axum HTTP handlers (used by standalone daemon only)
+└── interface/       # axum HTTP + WebSocket server
 ```
 
 ---
@@ -119,7 +119,7 @@ make build     # release build (produces installer in gui/src-tauri/target/relea
 
 **1. Launch the app**
 
-Open Labalaba. The daemon starts automatically inside the app — nothing else to run.
+Open Labalaba. The daemon starts automatically as a background process — nothing else to install or run.
 
 **2. Add a task**
 
@@ -158,6 +158,7 @@ theme: "dark"              # "dark" | "light"
 log_buffer_lines: 5000
 notifications_enabled: true
 auto_check_updates: true
+launch_at_login: false     # true = daemon mode; survives window close
 ```
 
 > **Data directory:** set `LABALABA_DATA_DIR` to override where `tasks.yaml`, `settings.yaml`, and `logs/` are stored.
@@ -169,10 +170,10 @@ auto_check_updates: true
 | Layer | Technology |
 |---|---|
 | **GUI** | [Tauri 2](https://tauri.app/) + [SvelteKit 5](https://svelte.dev/) + TypeScript |
-| **Backend** | Rust + [tokio](https://tokio.rs/) — embedded in the Tauri process |
-| **IPC** | Tauri commands (`invoke`) + Tauri events (`listen`) |
+| **Daemon** | Rust + [tokio](https://tokio.rs/) — separate sidecar process |
+| **Transport** | Local HTTP + WebSocket (`axum`) on `127.0.0.1`, token-authenticated |
 | **Persistence** | YAML (`serde_yaml`) |
-| **Scheduling** | Cron expressions (`cron` crate) |
+| **Scheduling** | Standard 5-field cron expressions (`cron` crate) |
 | **Styling** | Glassmorphism CSS with CSS custom properties |
 
 ---

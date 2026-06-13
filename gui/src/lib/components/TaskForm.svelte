@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { focusTrap } from '$lib/actions/focusTrap';
   import { open } from '@tauri-apps/plugin-dialog';
   import { api, type TaskDto, type TaskRequest, taskId } from '$lib/api/client';
   import { loadTasks } from '$lib/stores/tasks';
@@ -35,6 +36,24 @@
   let activeTab = $state<'basic' | 'advanced'>('basic');
   let saving = $state(false);
   let error = $state<string | null>(null);
+
+  const modalHeadingId = 'task-form-heading';
+
+  function switchTab(tab: 'basic' | 'advanced') {
+    activeTab = tab;
+  }
+
+  function handleTabKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      switchTab('basic');
+      (document.getElementById('tab-basic') as HTMLElement | null)?.focus();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      switchTab('advanced');
+      (document.getElementById('tab-advanced') as HTMLElement | null)?.focus();
+    }
+  }
 
   function parseEnv(raw: string): Record<string, string> {
     const env: Record<string, string> = {};
@@ -78,13 +97,17 @@
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
-    if (!name.trim() || !executable.trim()) {
-      error = 'Description and executable are required';
+    if (!name.trim()) {
+      error = 'Task name is required';
+      return;
+    }
+    if (!executable.trim()) {
+      error = 'Executable path is required';
       return;
     }
 
     // Handle runner prefix for Python scripts
-    const finalRunnerPrefix = scriptType === 'python' 
+    const finalRunnerPrefix = scriptType === 'python'
       ? (runnerPrefix === 'custom' ? customRunner : runnerPrefix)
       : undefined;
 
@@ -120,11 +143,11 @@
   }
 </script>
 
-<div class="modal-backdrop" role="dialog" aria-modal="true">
+<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }}>
   <div class="modal glass-strong">
     <div class="modal-header">
-      <h2>{isEdit ? 'Edit Task' : 'New Task'}</h2>
-      <button class="btn-icon" aria-label="Close" onclick={onClose}>
+      <h2 id={modalHeadingId}>{isEdit ? 'Edit Task' : 'New Task'}</h2>
+      <button class="btn-icon" aria-label="Close" onclick={onClose} disabled={saving}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -142,18 +165,30 @@
       </label>
     </div>
 
-    <div class="tabs">
+    <div class="tabs" role="tablist">
       <button
+        id="tab-basic"
         class="tab"
         class:active={activeTab === 'basic'}
-        onclick={() => activeTab = 'basic'}
+        role="tab"
+        aria-selected={activeTab === 'basic'}
+        aria-controls="tabpanel-basic"
+        tabindex={activeTab === 'basic' ? 0 : -1}
+        onclick={() => switchTab('basic')}
+        onkeydown={handleTabKeydown}
       >
         Basic
       </button>
       <button
+        id="tab-advanced"
         class="tab"
         class:active={activeTab === 'advanced'}
-        onclick={() => activeTab = 'advanced'}
+        role="tab"
+        aria-selected={activeTab === 'advanced'}
+        aria-controls="tabpanel-advanced"
+        tabindex={activeTab === 'advanced' ? 0 : -1}
+        onclick={() => switchTab('advanced')}
+        onkeydown={handleTabKeydown}
       >
         Advanced
       </button>
@@ -161,106 +196,113 @@
 
     <form onsubmit={handleSubmit}>
       {#if activeTab === 'basic'}
-        {#if scriptType === 'python'}
+        <div id="tabpanel-basic" role="tabpanel" aria-labelledby="tab-basic" tabindex="0">
           <div class="form-group full">
-            <label for="runner-prefix">Python Runner</label>
-            <select id="runner-prefix" class="input" bind:value={runnerPrefix}>
-              {#each runnerPresets as preset}
-                <option value={preset}>{preset}</option>
-              {/each}
-              <option value="custom">Custom...</option>
-            </select>
+            <label for="task-name">Description *</label>
+            <input id="task-name" class="input" type="text" bind:value={name}
+              placeholder="My Application" required />
           </div>
-          
-          {#if runnerPrefix === 'custom'}
+
+          {#if scriptType === 'python'}
             <div class="form-group full">
-              <label for="custom-runner">Custom Runner Command</label>
-              <input id="custom-runner" class="input" type="text" bind:value={customRunner}
-                placeholder="e.g., python3.11 or /path/to/venv/bin/python" />
-              <small class="form-hint">Enter the full runner command (e.g., "uv run", "python -m venv")</small>
+              <label for="runner-prefix">Python Runner</label>
+              <select id="runner-prefix" class="input" bind:value={runnerPrefix}>
+                {#each runnerPresets as preset}
+                  <option value={preset}>{preset}</option>
+                {/each}
+                <option value="custom">Custom...</option>
+              </select>
+            </div>
+
+            {#if runnerPrefix === 'custom'}
+              <div class="form-group full">
+                <label for="custom-runner">Custom Runner Command</label>
+                <input id="custom-runner" class="input" type="text" bind:value={customRunner}
+                  placeholder="e.g., uv run or /home/user/.venv/bin/python" />
+                <small class="form-hint">Enter the full runner command (e.g., "uv run", "/home/user/.venv/bin/python")</small>
+              </div>
+            {/if}
+
+            <div class="form-group full">
+              <label for="python-script">Python Script Path *</label>
+              <div class="input-row">
+                <input id="python-script" class="input" type="text" bind:value={executable}
+                  placeholder="C:\path\to\script.py" required />
+                <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
+                  Browse
+                </button>
+              </div>
+            </div>
+          {:else}
+            <div class="form-group full">
+              <label for="task-exe">Executable Path *</label>
+              <div class="input-row">
+                <input id="task-exe" class="input" type="text" bind:value={executable}
+                  placeholder="C:\path\to\app.exe" required />
+                <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
+                  Browse
+                </button>
+              </div>
             </div>
           {/if}
-          
-          <div class="form-group full">
-            <label for="python-script">Python Script Path *</label>
-            <div class="input-row">
-              <input id="python-script" class="input" type="text" bind:value={executable}
-                placeholder="C:\path\to\script.py" required />
-              <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
-                Browse
-              </button>
-            </div>
-          </div>
-        {:else}
-          <div class="form-group full">
-            <label for="task-exe">Executable Path *</label>
-            <div class="input-row">
-              <input id="task-exe" class="input" type="text" bind:value={executable}
-                placeholder="C:\path\to\app.exe" required />
-              <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
-                Browse
-              </button>
-            </div>
-          </div>
-        {/if}
 
-        <div class="form-group full">
-          <label for="task-args">Arguments</label>
-          <input id="task-args" class="input" type="text" bind:value={argsRaw}
-            placeholder="--port 8080 --config config.yaml" />
-        </div>
-
-        <div class="form-group full">
-          <label for="task-name">Description *</label>
-          <input id="task-name" class="input" type="text" bind:value={name}
-            placeholder="My Application" required />
+          <div class="form-group full">
+            <label for="task-args">Arguments</label>
+            <input id="task-args" class="input" type="text" bind:value={argsRaw}
+              placeholder="--port 8080 --config config.yaml" />
+          </div>
         </div>
       {:else}
-        <div class="form-grid">
-          <div class="form-group full">
-            <label for="task-wd">Working Directory</label>
-            <div class="input-row">
-              <input id="task-wd" class="input" type="text" bind:value={workingDir}
-                placeholder="C:\path\to\workdir" />
-              <button type="button" class="btn btn-secondary" onclick={pickWorkingDir}>
-                Browse
-              </button>
+        <div id="tabpanel-advanced" role="tabpanel" aria-labelledby="tab-advanced" tabindex="0">
+          <div class="form-grid">
+            <div class="form-group full">
+              <label for="task-wd">Working Directory</label>
+              <div class="input-row">
+                <input id="task-wd" class="input" type="text" bind:value={workingDir}
+                  placeholder="C:\path\to\workdir" />
+                <button type="button" class="btn btn-secondary" onclick={pickWorkingDir}>
+                  Browse
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div class="form-group full">
-            <label for="task-env">Environment Variables <span class="label-hint">(KEY=VALUE per line)</span></label>
-            <textarea id="task-env" class="input textarea" rows="3" bind:value={envRaw}
-              placeholder="NODE_ENV=production&#10;PORT=8080"></textarea>
-          </div>
+            <div class="form-group full">
+              <label for="task-env">Environment Variables <span class="label-hint">(KEY=VALUE per line)</span></label>
+              <textarea id="task-env" class="input textarea" rows="3" bind:value={envRaw}
+                placeholder="NODE_ENV=production&#10;PORT=8080"></textarea>
+              <small class="form-hint">One KEY=VALUE per line; values may contain =; lines without = are ignored</small>
+            </div>
 
-          <div class="form-group">
-            <label for="task-cron">Cron Schedule</label>
-            <input id="task-cron" class="input" type="text" bind:value={cronExpr}
-              placeholder="0 */6 * * * (optional)" />
-          </div>
+            <div class="form-group">
+              <label for="task-cron">Cron Schedule</label>
+              <input id="task-cron" class="input" type="text" bind:value={cronExpr}
+                placeholder="0 */6 * * * (optional)" />
+              <small class="form-hint">Standard 5-field cron, e.g. 0 */6 * * * — leave blank to run manually</small>
+            </div>
 
-          <div class="form-group">
-            <label for="task-delay">Startup Delay (ms)</label>
-            <input id="task-delay" class="input" type="number" min="0" bind:value={startupDelay} />
-          </div>
+            <div class="form-group">
+              <label for="task-delay">Startup Delay (ms)</label>
+              <input id="task-delay" class="input" type="number" min="0" bind:value={startupDelay} />
+              <small class="form-hint">In milliseconds (5000 = 5 seconds)</small>
+            </div>
 
-          <div class="toggles">
-            <label class="toggle-label">
-              <span>Run as Admin</span>
-              <label class="toggle">
-                <input type="checkbox" bind:checked={runAsAdmin} />
-                <span class="toggle-track"></span>
-              </label>
-            </label>
+            <div class="toggles">
+              <div class="toggle-label">
+                <span>Run as Admin</span>
+                <label class="toggle">
+                  <input type="checkbox" bind:checked={runAsAdmin} />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
 
-            <label class="toggle-label">
-              <span>Auto-restart on crash</span>
-              <label class="toggle">
-                <input type="checkbox" bind:checked={autoRestart} />
-                <span class="toggle-track"></span>
-              </label>
-            </label>
+              <div class="toggle-label">
+                <span>Auto-restart on crash</span>
+                <label class="toggle">
+                  <input type="checkbox" bind:checked={autoRestart} />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
       {/if}
@@ -270,9 +312,9 @@
       {/if}
 
       <div class="modal-footer">
-        <button type="button" class="btn" onclick={onClose}>Cancel</button>
+        <button type="button" class="btn" onclick={onClose} disabled={saving}>Cancel</button>
         <button type="submit" class="btn btn-primary" disabled={saving}>
-          {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Task'}
+          {saving ? (isEdit ? 'Saving…' : 'Creating…') : isEdit ? 'Save Changes' : 'Create Task'}
         </button>
       </div>
     </form>
@@ -297,8 +339,8 @@
     gap: 1.5rem;
     margin-bottom: 1rem;
     padding: 0.75rem;
-    background: var(--surface-elevated);
-    border-radius: 6px;
+    background: var(--bg-surface-hover);
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border-subtle);
   }
 
@@ -346,11 +388,18 @@
     gap: 0 1rem;
   }
 
+  @media (max-width: 460px) {
+    .form-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
   .form-group.full { grid-column: 1 / -1; }
 
   .input-row {
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
   }
 
   .input-row .input { flex: 1; }

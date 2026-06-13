@@ -25,7 +25,7 @@
 
   :global(body) {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    font-size: 14px;
+    font-size: 0.875rem;
     line-height: 1.5;
     color: var(--text-primary);
     background: var(--bg-base);

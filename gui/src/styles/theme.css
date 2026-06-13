@@ -12,11 +12,14 @@
 
   --text-primary: #e8eaf0;
   --text-secondary: #8b95a9;
-  --text-muted: #4a5568;
+  --text-muted: #9aa3b3;
 
   --accent: #63b3ed;
   --accent-hover: #90cdf4;
   --accent-glow: rgba(99 179 237 / 0.25);
+
+  --btn-primary-bg: #2b6cb0;
+  --btn-primary-bg-hover: #2c5fa0;
 
   --status-running: #48bb78;
   --status-stopped: #718096;
@@ -33,6 +36,12 @@
 
   --shadow-glass: 0 4px 24px rgba(0 0 0 / 0.4), inset 0 1px 0 rgba(255 255 255 / 0.06);
   --shadow-card: 0 2px 12px rgba(0 0 0 / 0.3);
+
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
 }
 
 /* ===== Light theme overrides ===== */
@@ -48,16 +57,19 @@
 
   --text-primary: #1a202c;
   --text-secondary: #4a5568;
-  --text-muted: #a0aec0;
+  --text-muted: #5a6573;
 
   --accent: #3182ce;
   --accent-hover: #2b6cb0;
   --accent-glow: rgba(49 130 206 / 0.2);
 
+  --btn-primary-bg: #2c5282;
+  --btn-primary-bg-hover: #22497a;
+
   --status-running: #276749;
-  --status-stopped: #4a5568;
+  --status-stopped: #718096;
   --status-crashed: #c53030;
-  --status-starting: #b7791f;
+  --status-starting: #8a4d0f;
 
   --danger: #c53030;
   --danger-hover: #9b2c2c;

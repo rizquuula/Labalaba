@@ -20,7 +20,7 @@ export async function loadTasks(silent = false) {
   try {
     const list = await api.tasks.list();
     tasks.set(list);
-    tasksError.set(null);
+    if (!silent) tasksError.set(null);
   } catch (e) {
     tasksError.set(String(e));
   } finally {
@@ -38,8 +38,13 @@ export async function refreshTask(id: string) {
 }
 
 export async function removeTask(id: string) {
-  await api.tasks.remove(id);
-  tasks.update(list => list.filter(t => t.config.id !== id));
+  try {
+    await api.tasks.remove(id);
+    tasks.update(list => list.filter(t => t.config.id !== id));
+  } catch (e) {
+    tasksError.set(String(e));
+    throw e;
+  }
 }
 
 // Poll for status updates every 2 seconds (silent — no loading flash)

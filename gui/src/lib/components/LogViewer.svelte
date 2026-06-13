@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { connectLogStream, fetchHistoricalLogs, type LogEntry } from '$lib/api/websocket';
 
   let { taskId, taskName, onClose } = $props<{
@@ -15,12 +15,11 @@
   let disconnect: (() => void) | null = null;
   let destroyed = false;
 
-  function appendLive(entry: LogEntry) {
+  async function appendLive(entry: LogEntry) {
     logs = [...logs.slice(-4999), entry];
     if (autoScroll) {
-      setTimeout(() => {
-        container?.scrollTo({ top: container.scrollHeight });
-      }, 0);
+      await tick();
+      container?.scrollTo({ top: container.scrollHeight });
     }
   }
 
@@ -91,9 +90,8 @@
     loadingHistory = false;
 
     if (autoScroll && logs.length > 0) {
-      setTimeout(() => {
-        container?.scrollTo({ top: container.scrollHeight });
-      }, 0);
+      await tick();
+      container?.scrollTo({ top: container.scrollHeight });
     }
   });
 
@@ -122,30 +120,33 @@
         <input type="checkbox" bind:checked={autoScroll} />
         <span>Auto-scroll</span>
       </label>
-      <button class="btn-icon" title="Clear" onclick={clearLogs}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="btn-icon" title="Clear" aria-label="Clear logs" onclick={clearLogs}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
           <polyline points="3 6 5 6 21 6"/>
           <path d="M19 6l-1 14H6L5 6"/>
           <path d="M9 6V4h6v2"/>
         </svg>
       </button>
-      <button class="btn-icon" title="Close" onclick={onClose}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="btn-icon" title="Close" aria-label="Close logs" onclick={onClose}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
       </button>
     </div>
   </div>
 
-  <div class="log-body" bind:this={container}>
+  <div class="log-body" bind:this={container} aria-live={loadingHistory ? 'off' : 'polite'} aria-relevant="additions">
     {#if loadingHistory}
       <p class="log-loading">Loading historical logs…</p>
     {:else if logs.length === 0}
       <p class="log-empty">Waiting for output…</p>
     {:else}
-      {#each logs as entry (entry.timestamp + entry.line)}
+      {#each logs as entry (entry.timestamp + entry.stream + entry.line)}
         <div class={`log-line ${getLineClass(entry)}`}>
           <span class="log-ts">{entry.timestamp.slice(11, 19)}</span>
+          {#if entry.stream === 'stderr'}
+            <span class="stream-tag" aria-hidden="true">ERR</span>
+          {/if}
           <span class="log-text">{entry.line}</span>
         </div>
       {/each}
@@ -159,7 +160,7 @@
     flex-direction: column;
     border-radius: var(--radius-md);
     overflow: hidden;
-    height: 320px;
+    height: clamp(180px, 30vh, 380px);
     margin: 0 1.25rem 1.25rem;
   }
 
@@ -222,6 +223,15 @@
 
   .line-out .log-text { color: var(--text-primary); }
   .line-err .log-text { color: var(--status-crashed); }
+
+  .stream-tag {
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--status-crashed);
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
 
   .log-empty {
     padding: 1rem;

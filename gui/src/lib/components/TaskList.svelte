@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tasks, tasksLoading, tasksError } from '$lib/stores/tasks';
+  import { settings } from '$lib/stores/settings';
   import { derived } from 'svelte/store';
   import TaskCard from './TaskCard.svelte';
   import type { TaskDto } from '$lib/api/client';
@@ -31,7 +32,7 @@
   <div class="list-header">
     <h2 class="section-title">Tasks</h2>
     <button class="btn btn-primary" onclick={onAddNew}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
       New Task
@@ -39,36 +40,43 @@
   </div>
 
   {#if $tasksLoading && $tasks.length === 0}
-    <div class="empty-state">
+    <div class="empty-state" role="status" aria-label="Connecting to daemon">
       <div class="spinner"></div>
       <p>Connecting to daemon…</p>
     </div>
   {:else if $tasksError && $tasks.length === 0}
     <div class="empty-state error">
-      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
       <p>Cannot connect to daemon</p>
-      <p class="error-sub">Make sure labalaba-daemon is running on port 27015</p>
+      <p class="error-sub">Make sure the daemon is running on the configured port ({$settings.daemon_port})</p>
     </div>
   {:else if $tasks.length === 0}
     <div class="empty-state">
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
         <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12h6"/><path d="M12 9v6"/>
       </svg>
       <p>No tasks yet</p>
       <button class="btn btn-primary" onclick={onAddNew}>Add your first task</button>
     </div>
   {:else}
+    {#if $tasksError}
+      <div class="connection-banner" role="alert">
+        Connection lost — showing last known state
+      </div>
+    {/if}
+
     <div class="filters">
       <div class="search-input">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
           <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
-        <input 
-          type="text" 
-          placeholder="Search tasks..." 
+        <input
+          type="text"
+          placeholder="Search tasks…"
+          aria-label="Search tasks"
           bind:value={searchQuery}
           class="input input-sm"
         />
@@ -78,8 +86,8 @@
           </button>
         {/if}
       </div>
-      <select class="filter-select" bind:value={statusFilter}>
-        <option value="all">All Status</option>
+      <select class="input filter-select" bind:value={statusFilter}>
+        <option value="all">All statuses</option>
         <option value="running">Running</option>
         <option value="stopped">Stopped</option>
         <option value="crashed">Crashed</option>
@@ -161,22 +169,16 @@
 
   .filter-select {
     width: 140px;
-    padding: 0.375rem 0.5rem;
+  }
+
+  .connection-banner {
+    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--status-crashed) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--status-crashed) 30%, transparent);
+    color: var(--status-crashed);
     font-size: 0.8125rem;
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    cursor: pointer;
-  }
-
-  .filter-select:hover {
-    border-color: var(--border-accent);
-  }
-
-  .filter-select option {
-    background: var(--bg-base);
-    color: var(--text-primary);
   }
 
   .empty-state {

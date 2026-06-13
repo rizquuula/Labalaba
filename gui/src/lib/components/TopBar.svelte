@@ -9,7 +9,7 @@
   getVersion().then(v => appVersion = v);
 
   function sunIcon() {
-    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
       <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/>
       <line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
       <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/>
@@ -19,7 +19,7 @@
   }
 
   function moonIcon() {
-    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
     </svg>`;
   }
@@ -28,7 +28,7 @@
 <header class="topbar glass">
   <!-- Branding -->
   <div class="brand">
-    <img src="/logo.jpg" alt="Labalaba" class="brand-logo" />
+    <img src="/logo.jpg" alt="Labalaba" class="brand-logo" width="28" height="28" />
     <span class="brand-name">Labalaba <span class="brand-version">v{appVersion}</span></span>
   </div>
 
@@ -57,10 +57,10 @@
 
   <!-- Actions -->
   <div class="actions">
-    <button class="btn-icon" title="Toggle theme" onclick={() => theme.toggle()}>
+    <button class="btn-icon" title="Toggle theme" aria-label="Toggle theme" onclick={() => theme.toggle()}>
       {@html $theme === 'dark' ? sunIcon() : moonIcon()}
     </button>
-    <button class="btn-icon" title="Settings" onclick={onSettingsClick}>
+    <button class="btn-icon" title="Settings" aria-label="Open settings" onclick={onSettingsClick}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="3"/>
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06
@@ -103,7 +103,7 @@
   .brand-logo {
     width: 28px;
     height: 28px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     object-fit: cover;
   }
 
@@ -127,6 +127,12 @@
     gap: 0.75rem;
     flex: 1;
     justify-content: center;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  @media (max-width: 560px) {
+    .stat-label { display: none; }
   }
 
   .stat {

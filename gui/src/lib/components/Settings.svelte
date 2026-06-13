@@ -1,22 +1,29 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { settings, loadSettings, saveSettings } from '$lib/stores/settings';
   import { api, type UpdateInfo } from '$lib/api/client';
   import { theme } from '$lib/stores/theme';
+  import { focusTrap } from '$lib/actions/focusTrap';
   import { onMount } from 'svelte';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
-  let draft = $state({ ...$settings });
+  let draft = $state(untrack(() => ({ ...$settings })));
   let saving = $state(false);
   let updateInfo = $state<UpdateInfo | null>(null);
   let checkingUpdate = $state(false);
   let updateError = $state<string | null>(null);
   let saveError = $state<string | null>(null);
 
-  onMount(() => loadSettings());
+  const modalHeadingId = 'settings-heading';
 
-  // Keep draft in sync when settings load
-  $effect(() => { draft = { ...$settings }; });
+  onMount(() => {
+    loadSettings().then(() => {
+      // Seed draft from freshly-loaded settings only once on mount,
+      // using untrack so we don't re-run when settings updates later.
+      untrack(() => { draft = { ...$settings }; });
+    });
+  });
 
   // Coerce a possibly-empty/NaN number input to an integer within [min, max],
   // falling back to `fallback` when the value is missing/unparseable. HTML
@@ -67,11 +74,11 @@
   }
 </script>
 
-<div class="modal-backdrop" role="dialog" aria-modal="true">
+<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }}>
   <div class="modal glass-strong">
     <div class="modal-header">
-      <h2>Settings</h2>
-      <button class="btn-icon" aria-label="Close" onclick={onClose}>
+      <h2 id={modalHeadingId}>Settings</h2>
+      <button class="btn-icon" aria-label="Close" onclick={onClose} disabled={saving}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -83,10 +90,10 @@
       <section class="settings-section">
         <h3 class="section-heading">Appearance</h3>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Theme</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-theme">Theme</p>
           </div>
-          <select class="input select-sm" bind:value={draft.theme}>
+          <select class="input select-sm" id="setting-theme" aria-labelledby="label-theme" bind:value={draft.theme}>
             <option value="dark">Dark</option>
             <option value="light">Light</option>
           </select>
@@ -97,26 +104,30 @@
       <section class="settings-section">
         <h3 class="section-heading">Daemon</h3>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Daemon Port</p>
-            <p class="setting-desc">Local port for HTTP API and WebSocket</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-daemon-port">Daemon Port</p>
+            <p class="setting-desc">Port used by the background daemon</p>
           </div>
-          <input class="input input-sm" type="number" min="1024" max="65535"
+          <input class="input input-sm" id="setting-daemon-port" type="number" min="1024" max="65535"
+            aria-labelledby="label-daemon-port"
             bind:value={draft.daemon_port} />
         </div>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Config File Path</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-config-path">Config File Path</p>
             <p class="setting-desc">Path to tasks.yaml</p>
           </div>
-          <input class="input input-sm" type="text" bind:value={draft.config_path} />
+          <input class="input input-sm" id="setting-config-path" type="text"
+            aria-labelledby="label-config-path"
+            bind:value={draft.config_path} />
         </div>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Log Buffer (lines)</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-log-buffer">Log Buffer (lines)</p>
             <p class="setting-desc">Max log lines kept in memory per task</p>
           </div>
-          <input class="input input-sm" type="number" min="100" max="50000"
+          <input class="input input-sm" id="setting-log-buffer" type="number" min="100" max="50000"
+            aria-labelledby="label-log-buffer"
             bind:value={draft.log_buffer_lines} />
         </div>
       </section>
@@ -125,26 +136,30 @@
       <section class="settings-section">
         <h3 class="section-heading">Logs</h3>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Log Directory</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-log-dir">Log Directory</p>
             <p class="setting-desc">Where per-task log files are written</p>
           </div>
-          <input class="input input-sm" type="text" bind:value={draft.log_dir} />
+          <input class="input input-sm" id="setting-log-dir" type="text"
+            aria-labelledby="label-log-dir"
+            bind:value={draft.log_dir} />
         </div>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Max File Size (MB)</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-log-size">Max File Size (MB)</p>
             <p class="setting-desc">Rotate a log file once it exceeds this size</p>
           </div>
-          <input class="input input-sm" type="number" min="1" max="1024"
+          <input class="input input-sm" id="setting-log-size" type="number" min="1" max="1024"
+            aria-labelledby="label-log-size"
             bind:value={draft.log_max_file_size_mb} />
         </div>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Max Rotated Files</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-log-rotated">Max Rotated Files</p>
             <p class="setting-desc">How many rotated log files to keep per task</p>
           </div>
-          <input class="input input-sm" type="number" min="0" max="100"
+          <input class="input input-sm" id="setting-log-rotated" type="number" min="0" max="100"
+            aria-labelledby="label-log-rotated"
             bind:value={draft.log_max_rotated_files} />
         </div>
       </section>
@@ -153,21 +168,21 @@
       <section class="settings-section">
         <h3 class="section-heading">Notifications</h3>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Desktop Notifications</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-notifications">Desktop Notifications</p>
             <p class="setting-desc">Notify when a task crashes or stops</p>
           </div>
-          <label class="toggle">
+          <label class="toggle" aria-labelledby="label-notifications">
             <input type="checkbox" bind:checked={draft.notifications_enabled} />
             <span class="toggle-track"></span>
           </label>
         </div>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Launch on Startup</p>
-            <p class="setting-desc">Start Labalaba with Windows</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-launch-startup">Launch at login</p>
+            <p class="setting-desc">Start on system startup</p>
           </div>
-          <label class="toggle">
+          <label class="toggle" aria-labelledby="label-launch-startup">
             <input type="checkbox" bind:checked={draft.launch_on_startup} />
             <span class="toggle-track"></span>
           </label>
@@ -178,17 +193,17 @@
       <section class="settings-section">
         <h3 class="section-heading">Updates</h3>
         <div class="setting-row">
-          <div>
-            <p class="setting-name">Auto-check for Updates</p>
+          <div class="setting-label-group">
+            <p class="setting-name" id="label-auto-updates">Auto-check for Updates</p>
           </div>
-          <label class="toggle">
+          <label class="toggle" aria-labelledby="label-auto-updates">
             <input type="checkbox" bind:checked={draft.auto_check_updates} />
             <span class="toggle-track"></span>
           </label>
         </div>
 
         <div class="update-check-area">
-          <button class="btn" onclick={checkForUpdates} disabled={checkingUpdate}>
+          <button class="btn" onclick={checkForUpdates} disabled={checkingUpdate || saving}>
             {checkingUpdate ? 'Checking…' : 'Check for Updates Now'}
           </button>
 
@@ -218,7 +233,7 @@
       {#if saveError}
         <p class="save-error">{saveError}</p>
       {/if}
-      <button type="button" class="btn" onclick={onClose}>Cancel</button>
+      <button type="button" class="btn" onclick={onClose} disabled={saving}>Cancel</button>
       <button type="button" class="btn btn-primary" onclick={handleSave} disabled={saving}>
         {saving ? 'Saving…' : 'Save Settings'}
       </button>
@@ -266,6 +281,12 @@
     justify-content: space-between;
     gap: 1rem;
     padding: 0.5rem 0;
+    flex-wrap: wrap;
+  }
+
+  .setting-label-group {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .setting-name {
@@ -297,7 +318,7 @@
     gap: 0.75rem;
   }
 
-  .update-label { font-size: 0.875rem; color: var(--status-running); }
+  .update-label { font-size: 0.875rem; color: var(--accent); }
   .update-current { font-size: 0.8125rem; color: var(--text-muted); }
   .update-error { font-size: 0.8125rem; color: var(--status-crashed); }
 

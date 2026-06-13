@@ -10,6 +10,7 @@
   import { api } from '$lib/api/client';
   import type { TaskDto } from '$lib/api/client';
   import type { UpdateInfo } from '$lib/api/client';
+  import { focusTrap } from '$lib/actions/focusTrap';
 
   // Modal state
   let showForm = $state(false);
@@ -105,10 +106,10 @@
 {/if}
 
 {#if updateInfo}
-  <div class="update-modal-backdrop" role="dialog" aria-modal="true">
+  <div class="update-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-modal-title" use:focusTrap={{ onClose: dismissUpdate }}>
     <div class="update-modal glass-strong">
       <div class="modal-header">
-        <h2>New Version Available</h2>
+        <h2 id="update-modal-title">New Version Available</h2>
         <button class="btn-icon" aria-label="Close" onclick={dismissUpdate}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -128,15 +129,16 @@
           </div>
         {/if}
         
-        {#if updateInfo.release_url}
-          <a href={updateInfo.release_url} target="_blank" class="btn btn-primary">
-            Download Update
-          </a>
-        {/if}
-        
-        <button class="btn" onclick={dismissUpdate}>
-          Remind Me Later
-        </button>
+        <div class="update-footer">
+          <button class="btn" onclick={dismissUpdate}>
+            Remind Me Later
+          </button>
+          {#if updateInfo.release_url}
+            <a href={updateInfo.release_url} target="_blank" class="btn btn-primary">
+              Download Update
+            </a>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -160,7 +162,8 @@
   .update-modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(0 0 0 / 0.6);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -169,12 +172,14 @@
   }
 
   .update-modal {
-    background: var(--bg-primary);
-    border-radius: 0.75rem;
+    background: var(--bg-glass-strong);
+    border-radius: var(--radius-lg);
     padding: 1.5rem;
     max-width: 500px;
     width: 100%;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    max-height: 88vh;
+    overflow-y: auto;
+    box-shadow: var(--shadow-glass);
   }
 
   .update-content {
@@ -191,7 +196,7 @@
   }
 
   .release-notes {
-    background: var(--bg-secondary);
+    background: var(--bg-surface);
     border-radius: 0.5rem;
     padding: 1rem;
     max-height: 200px;
@@ -212,7 +217,12 @@
     white-space: pre-wrap;
   }
 
-  .update-content .btn {
-    width: 100%;
+  .update-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 1rem;
   }
 </style>

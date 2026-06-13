@@ -106,7 +106,22 @@ pub fn start_or_connect_daemon() -> anyhow::Result<(DaemonConnection, Option<std
     };
 
     let token_path = base.join("daemon.token");
-    let token = read_token_with_retry(&token_path)?;
+    let token = read_token_with_retry(&token_path).map_err(|_| {
+        if child.is_none() {
+            // We didn't spawn it: something else is on the port but there's no
+            // daemon token — likely a foreign process, not the Labalaba daemon.
+            anyhow::anyhow!(
+                "a process is already listening on 127.0.0.1:{port} but no Labalaba daemon token \
+                 was found at {} — that port may be in use by another application",
+                token_path.display()
+            )
+        } else {
+            anyhow::anyhow!(
+                "the daemon started but its token file did not appear at {}",
+                token_path.display()
+            )
+        }
+    })?;
 
     Ok((DaemonConnection { base_url, ws_url, token }, child))
 }

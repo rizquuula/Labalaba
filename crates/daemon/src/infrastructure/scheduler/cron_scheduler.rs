@@ -27,8 +27,12 @@ impl SchedulerService for CronScheduler {
         let state_weak = self.state.clone();
         let id = task_id.clone();
 
-        // Abort any existing handle for this task before replacing it.
-        if let Some(old) = self.handles.write().await.remove(&task_id) {
+        // Hold the write lock across abort + spawn + insert so a concurrent
+        // unschedule() (e.g. task deletion) cannot slip between the remove and
+        // the insert and leave an un-tracked, un-abortable cron loop running.
+        // tokio::spawn does not await, so holding the lock across it is safe.
+        let mut handles = self.handles.write().await;
+        if let Some(old) = handles.remove(&task_id) {
             old.abort();
         }
 
@@ -46,7 +50,7 @@ impl SchedulerService for CronScheduler {
             }
         });
 
-        self.handles.write().await.insert(task_id, handle);
+        handles.insert(task_id, handle);
         Ok(())
     }
 

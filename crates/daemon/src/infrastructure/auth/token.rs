@@ -21,15 +21,22 @@ pub fn load_or_create_token(data_dir: &Path) -> io::Result<String> {
         uuid::Uuid::new_v4().simple()
     );
 
-    let mut file = std::fs::File::create(&token_path)?;
-    file.write_all(token.as_bytes())?;
-
+    // Create the file with 0o600 from the start (not chmod-after-write) so the
+    // token is never world-readable, even briefly, on unix.
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&token_path, perms)?;
-    }
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&token_path)?
+    };
+    #[cfg(not(unix))]
+    let mut file = std::fs::File::create(&token_path)?;
+
+    file.write_all(token.as_bytes())?;
 
     Ok(token)
 }

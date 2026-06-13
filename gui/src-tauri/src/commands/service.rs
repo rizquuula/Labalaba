@@ -28,7 +28,7 @@ fn unit_path() -> Option<std::path::PathBuf> {
 fn unit_contents(daemon_path: &Path) -> String {
     format!(
         "[Unit]\nDescription=Labalaba Daemon\nAfter=network.target\n\n\
-         [Service]\nExecStart={}\nRestart=on-failure\n\n\
+         [Service]\nExecStart=\"{}\"\nRestart=on-failure\n\n\
          [Install]\nWantedBy=default.target\n",
         daemon_path.display()
     )
@@ -172,18 +172,19 @@ const REG_VALUE: &str = "Labalaba Daemon";
 
 #[cfg(target_os = "windows")]
 fn install_autostart(daemon_path: &Path) -> std::io::Result<()> {
+    // Use .arg() chaining (not a homogeneous &str array) so the daemon path is
+    // passed as an OsStr — handles spaces and non-UTF-8 paths without lossy
+    // conversion. Command passes args directly to reg.exe (no shell splitting).
     let status = std::process::Command::new("reg")
-        .args([
-            "add",
-            REG_KEY,
-            "/v",
-            REG_VALUE,
-            "/t",
-            "REG_SZ",
-            "/d",
-            daemon_path.to_str().unwrap_or(""),
-            "/f",
-        ])
+        .arg("add")
+        .arg(REG_KEY)
+        .arg("/v")
+        .arg(REG_VALUE)
+        .arg("/t")
+        .arg("REG_SZ")
+        .arg("/d")
+        .arg(daemon_path)
+        .arg("/f")
         .status()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 

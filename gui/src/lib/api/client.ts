@@ -92,7 +92,12 @@ let connectionPromise: Promise<DaemonConnection> | null = null;
 
 export function getConnection(): Promise<DaemonConnection> {
   if (!connectionPromise) {
-    connectionPromise = invoke<DaemonConnection>('get_daemon_connection');
+    // Don't cache a rejected promise: if the daemon isn't ready yet, clear the
+    // cache so the next call retries instead of failing for the whole session.
+    connectionPromise = invoke<DaemonConnection>('get_daemon_connection').catch((e) => {
+      connectionPromise = null;
+      throw e;
+    });
   }
   return connectionPromise;
 }

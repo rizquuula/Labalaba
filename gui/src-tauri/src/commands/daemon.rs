@@ -24,6 +24,34 @@ impl Default for DaemonHandle {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+pub struct DaemonStatus {
+    pub running: bool,
+    pub port: u16,
+    pub autostart: bool,
+}
+
+#[tauri::command]
+pub fn daemon_status() -> DaemonStatus {
+    let (settings, _) = tauri::async_runtime::block_on(labalaba_daemon::load_settings());
+    let port = settings.daemon_port;
+    let running = is_listening(port);
+    let autostart = crate::commands::service::is_autostart_installed();
+    DaemonStatus { running, port, autostart }
+}
+
+#[tauri::command]
+pub fn start_daemon(state: tauri::State<'_, DaemonHandle>) -> Result<(), String> {
+    let (conn, child) = start_or_connect_daemon().map_err(|e| e.to_string())?;
+    *state.connection.lock().unwrap() = Some(conn);
+    let mut guard = state.child.lock().unwrap();
+    if let Some(mut old) = guard.take() {
+        let _ = old.try_wait();
+    }
+    *guard = child;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_daemon_connection(
     state: tauri::State<'_, DaemonHandle>,

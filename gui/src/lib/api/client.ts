@@ -154,6 +154,9 @@ export const api = {
     detectInterpreter: (kind: 'sh' | 'bash' | 'zsh' | 'ps1' | 'bat') =>
       apiFetch<string | null>('POST', '/api/system/detect-interpreter', { kind }),
   },
+  daemon: {
+    shutdown: () => apiFetch<null>('POST', '/api/system/shutdown'),
+  },
 };
 
 export function taskId(task: TaskDto): string {

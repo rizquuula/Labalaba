@@ -5,6 +5,7 @@
   import TaskForm from '$lib/components/TaskForm.svelte';
   import LogViewer from '$lib/components/LogViewer.svelte';
   import Settings from '$lib/components/Settings.svelte';
+  import DaemonStatusBar from '$lib/components/DaemonStatusBar.svelte';
   import { loadTasks, startPolling, tasks } from '$lib/stores/tasks';
   import { api } from '$lib/api/client';
   import type { TaskDto } from '$lib/api/client';
@@ -93,6 +94,8 @@
       />
     {/if}
   </main>
+
+  <DaemonStatusBar />
 </div>
 
 {#if showForm}

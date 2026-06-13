@@ -17,6 +17,10 @@ pub fn get_autostart() -> Result<bool, String> {
     Ok(is_installed())
 }
 
+pub(crate) fn is_autostart_installed() -> bool {
+    is_installed()
+}
+
 // ── Linux (systemd --user) ────────────────────────────────────────────────────
 
 #[cfg(target_os = "linux")]

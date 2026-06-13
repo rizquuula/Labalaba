@@ -96,6 +96,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::daemon::get_daemon_connection,
+            commands::daemon::daemon_status,
+            commands::daemon::start_daemon,
             commands::service::set_autostart,
             commands::service::get_autostart,
         ])

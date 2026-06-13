@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { get } from 'svelte/store';
   import { connectLogStream, fetchHistoricalLogs, type LogEntry } from '$lib/api/websocket';
+  import { settings } from '$lib/stores/settings';
 
   let { taskId, taskName, onClose } = $props<{
     taskId: string;
@@ -8,15 +10,44 @@
     onClose: () => void;
   }>();
 
+  // Identical log lines (same timestamp/stream/text) legitimately recur, so we
+  // tag every displayed entry with a unique key — keying the {#each} by content
+  // would throw on duplicates once a lot of history is loaded.
+  type KeyedLog = LogEntry & { _k: number };
+  let seq = 0;
+  function tag(entry: LogEntry): KeyedLog {
+    return { ...entry, _k: seq++ };
+  }
+
   let container: HTMLDivElement;
-  let logs = $state<LogEntry[]>([]);
+  let logs = $state<KeyedLog[]>([]);
   let autoScroll = $state(true);
   let loadingHistory = $state(false);
+  let loadingOlder = $state(false);
+  let hasMore = $state(false);
   let disconnect: (() => void) | null = null;
   let destroyed = false;
 
+  // Lines fetched per request and kept in the live tail, driven by the
+  // "Log Buffer (lines)" setting (clamped to its UI bounds). "Load older" can
+  // grow the buffer past this so earlier history stays visible once pulled.
+  const pageSize = Math.min(50000, Math.max(100, get(settings).log_buffer_lines || 5000));
+
+  // Paging bookkeeping: `historyLoaded` counts non-live disk lines pulled so far
+  // (the offset base for the next older page); `liveCount` counts lines appended
+  // live since open; `olderCount` counts lines prepended via "load older" so the
+  // live-tail cap never trims them away.
+  let historyLoaded = 0;
+  let liveCount = 0;
+  let olderCount = 0;
+
+  function liveCap(): number {
+    return pageSize + olderCount;
+  }
+
   async function appendLive(entry: LogEntry) {
-    logs = [...logs.slice(-4999), entry];
+    liveCount += 1;
+    logs = [...logs.slice(-(liveCap() - 1)), tag(entry)];
     if (autoScroll) {
       await tick();
       container?.scrollTo({ top: container.scrollHeight });
@@ -28,16 +59,16 @@
   }
 
   /**
-   * Length of the largest run where a prefix of `buffer` equals a suffix of
-   * `history` (the lines double-counted across the fetch boundary). Returns 0
-   * when nothing overlaps. Bounded by buffer length and history length.
+   * Length of the largest run where a suffix of `older` equals a prefix of
+   * `newer` (lines double-counted across a page boundary). Returns 0 when
+   * nothing overlaps. Bounded by the shorter of the two arrays.
    */
-  function boundaryOverlap(history: LogEntry[], buffer: LogEntry[]): number {
-    const max = Math.min(history.length, buffer.length);
+  function boundaryOverlap(older: LogEntry[], newer: LogEntry[]): number {
+    const max = Math.min(older.length, newer.length);
     for (let k = max; k > 0; k--) {
       let matches = true;
       for (let i = 0; i < k; i++) {
-        if (!sameEntry(history[history.length - k + i], buffer[i])) {
+        if (!sameEntry(older[older.length - k + i], newer[i])) {
           matches = false;
           break;
         }
@@ -72,7 +103,10 @@
     }
     disconnect = stop;
 
-    const history = await fetchHistoricalLogs(taskId, 500);
+    const history = await fetchHistoricalLogs(taskId, pageSize, 0);
+    historyLoaded = history.length;
+    // A full page of history implies there may be older lines to page into.
+    hasMore = history.length >= pageSize;
 
     // Each backend line is BOTH written to the history file AND emitted live, so
     // a line produced inside the fetch window can appear in history *and* in the
@@ -81,10 +115,12 @@
     // overlap (buffer prefix == history suffix) rather than globally de-duping —
     // that preserves legitimately-repeated output elsewhere in the stream.
     const overlap = boundaryOverlap(history, buffer);
-    logs = history;
-    for (const entry of buffer.slice(overlap)) {
-      logs = [...logs.slice(-4999), entry];
+    logs = history.map(tag);
+    const flushed = buffer.slice(overlap);
+    for (const entry of flushed) {
+      logs = [...logs.slice(-(liveCap() - 1)), tag(entry)];
     }
+    liveCount += flushed.length;
     buffer.length = 0;
     liveReady = true;
     loadingHistory = false;
@@ -94,6 +130,38 @@
       container?.scrollTo({ top: container.scrollHeight });
     }
   });
+
+  async function loadOlder() {
+    if (loadingOlder || !hasMore || !container) return;
+    loadingOlder = true;
+    try {
+      // Skip everything currently newer than our oldest line: the disk history
+      // already pulled plus the live lines appended since (also written to disk).
+      const offset = historyLoaded + liveCount;
+      const older = await fetchHistoricalLogs(taskId, pageSize, offset);
+
+      // While the file grows live the page can reach slightly too far forward;
+      // strip any lines that overlap what we already show.
+      const overlap = boundaryOverlap(older, logs);
+      const fresh = overlap > 0 ? older.slice(0, older.length - overlap) : older;
+
+      if (fresh.length > 0) {
+        const prevHeight = container.scrollHeight;
+        const prevTop = container.scrollTop;
+        logs = [...fresh.map(tag), ...logs];
+        olderCount += fresh.length;
+        historyLoaded += fresh.length;
+        await tick();
+        // Keep the viewport anchored on the same line after prepending.
+        container.scrollTop = container.scrollHeight - prevHeight + prevTop;
+      }
+
+      // A short page (or one fully consumed by overlap) means we've hit the start.
+      hasMore = older.length >= pageSize && fresh.length > 0;
+    } finally {
+      loadingOlder = false;
+    }
+  }
 
   onDestroy(() => {
     destroyed = true;
@@ -141,7 +209,12 @@
     {:else if logs.length === 0}
       <p class="log-empty">Waiting for output…</p>
     {:else}
-      {#each logs as entry (entry.timestamp + entry.stream + entry.line)}
+      {#if hasMore}
+        <button class="load-older" onclick={loadOlder} disabled={loadingOlder}>
+          {loadingOlder ? 'Loading older lines…' : 'Load older lines'}
+        </button>
+      {/if}
+      {#each logs as entry (entry._k)}
         <div class={`log-line ${getLineClass(entry)}`}>
           <span class="log-ts">{entry.timestamp.slice(11, 19)}</span>
           {#if entry.stream === 'stderr'}
@@ -231,6 +304,30 @@
     color: var(--status-crashed);
     letter-spacing: 0.04em;
     user-select: none;
+  }
+
+  .load-older {
+    display: block;
+    width: 100%;
+    margin: 0 0 0.375rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .load-older:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .load-older:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .log-empty {

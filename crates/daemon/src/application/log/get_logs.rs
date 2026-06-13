@@ -17,11 +17,19 @@ pub struct GetLogs {
 }
 
 impl GetLogs {
-    /// Get the most recent `limit` log lines from a task's log files (live file
-    /// plus rotated siblings). Files are scanned newest-first and only as many
-    /// older files as needed are opened, so memory stays O(limit) rather than
-    /// loading every rotated file fully. Returned in chronological order.
-    pub async fn execute(&self, task_id: &TaskId, limit: usize) -> anyhow::Result<Vec<LogEntry>> {
+    /// Get a page of a task's log lines, newest-anchored. Returns the `limit`
+    /// lines that sit immediately *older* than the newest `offset` lines —
+    /// `offset = 0` yields the most recent `limit` lines (the common case),
+    /// while increasing `offset` walks backwards through history for a
+    /// "load older" pager. Files (live `.log` plus rotated siblings) are
+    /// scanned newest-first and only as many older files as needed are opened.
+    /// Returned in chronological order.
+    pub async fn execute(
+        &self,
+        task_id: &TaskId,
+        limit: usize,
+        offset: usize,
+    ) -> anyhow::Result<Vec<LogEntry>> {
         let (log_dir, max_rotated) = {
             let settings = self.state.settings.read().await;
             (
@@ -30,35 +38,43 @@ impl GetLogs {
             )
         };
 
-        read_recent_lines(&log_dir, task_id, limit, max_rotated).await
+        read_recent_lines(&log_dir, task_id, limit, offset, max_rotated).await
     }
 }
 
-/// Get the most recent `limit` log lines from a task's log files (live file
-/// plus rotated siblings) in `log_dir`. Files are scanned newest-first and only
-/// as many older files as needed are opened, so memory stays O(limit) rather
-/// than loading every rotated file fully. Returned in chronological order.
+/// Return the `limit` log lines immediately older than the newest `offset`
+/// lines for `task_id` in `log_dir`. We collect the newest `offset + limit`
+/// lines (live `.log` then `.log.1`, `.log.2`, … as needed) and drop the
+/// newest `offset`; the remainder (at most `limit`) is the requested page, in
+/// chronological order. Memory stays O(offset + limit).
 async fn read_recent_lines(
     log_dir: &Path,
     task_id: &TaskId,
     limit: usize,
+    offset: usize,
     max_rotated: usize,
 ) -> anyhow::Result<Vec<LogEntry>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
 
+    // We need the newest `offset + limit` lines, then drop the newest `offset`.
+    let target = offset.saturating_add(limit);
+    // Cap only the preallocation hint so a huge `offset` can't ask for a giant
+    // up-front allocation; the deque still grows to `target` if the data exists.
+    let cap_hint = target.min(4096);
+
     // Scan up to the configured rotated-file count (mirroring the writer), but
     // never beyond a sane cap.
     let max_rotated_scan = max_rotated.min(MAX_ROTATED_SCAN_CAP);
 
     // Newest-first file order: live `.log`, then `.log.1`, `.log.2`, ...
-    // Within a single file we keep the last `limit` lines in a bounded deque;
-    // across files we stop once we have `limit` total.
-    let mut collected: VecDeque<LogEntry> = VecDeque::with_capacity(limit);
+    // Within a single file we keep the last `target` lines in a bounded deque;
+    // across files we stop once we have `target` total.
+    let mut collected: VecDeque<LogEntry> = VecDeque::with_capacity(cap_hint);
 
     for i in 0..=max_rotated_scan {
-        if collected.len() >= limit {
+        if collected.len() >= target {
             break;
         }
 
@@ -72,15 +88,15 @@ async fn read_recent_lines(
             continue;
         }
 
-        // Read this file's parsed lines, keeping only its newest `limit`.
+        // Read this file's parsed lines, keeping only its newest `target`.
         let file = File::open(&log_path).await?;
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
-        let mut file_tail: VecDeque<LogEntry> = VecDeque::with_capacity(limit);
+        let mut file_tail: VecDeque<LogEntry> = VecDeque::with_capacity(cap_hint);
 
         while let Ok(Some(line)) = lines.next_line().await {
             if let Some(entry) = parse_log_line(task_id, &line) {
-                if file_tail.len() == limit {
+                if file_tail.len() == target {
                     file_tail.pop_front();
                 }
                 file_tail.push_back(entry);
@@ -89,14 +105,17 @@ async fn read_recent_lines(
 
         // This file is older than everything already collected, so prepend its
         // lines (chronologically before the newer ones), capping total.
-        let need = limit - collected.len();
+        let need = target - collected.len();
         let take = file_tail.len().min(need);
         for entry in file_tail.into_iter().rev().take(take) {
             collected.push_front(entry);
         }
     }
 
-    Ok(collected.into_iter().collect())
+    // `collected` is chronological (oldest..newest) and at most `target` long.
+    // Drop the newest `offset` lines; the remainder (≤ limit) is the page.
+    let keep = collected.len().saturating_sub(offset);
+    Ok(collected.into_iter().take(keep).collect())
 }
 
 fn parse_log_line(task_id: &TaskId, line: &str) -> Option<LogEntry> {
@@ -158,7 +177,7 @@ mod tests {
         )
         .await;
 
-        let out = read_recent_lines(dir.path(), &id, 2, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 2, 0, 5).await.unwrap();
         assert_eq!(out.len(), 2);
         // Newest two, chronological. The parser preserves the leading space
         // after the stream marker (existing format — kept intentionally).
@@ -177,7 +196,7 @@ mod tests {
 
         // Ask for 5 — should pull all of live (6,5), all of .log.1 (4,3), and
         // the newest one from .log.2 (2), returned chronologically.
-        let out = read_recent_lines(dir.path(), &id, 5, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 5, 0, 5).await.unwrap();
         let lines: Vec<&str> = out.iter().map(|e| e.line.as_str()).collect();
         assert_eq!(lines, vec![" 2", " 3", " 4", " 5", " 6"]);
     }
@@ -190,7 +209,7 @@ mod tests {
         // An older rotated file exists but should not be needed for limit=1.
         write_file(dir.path(), &format!("{}.log.1", id), &[&line("t1", "old")]).await;
 
-        let out = read_recent_lines(dir.path(), &id, 1, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 1, 0, 5).await.unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].line, " 6");
     }
@@ -204,11 +223,11 @@ mod tests {
         write_file(dir.path(), &format!("{}.log.7", id), &[&line("t0", "oldest")]).await;
 
         // With max_rotated = 5 the oldest file is NOT scanned.
-        let out = read_recent_lines(dir.path(), &id, 10, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 10, 0, 5).await.unwrap();
         assert!(out.is_empty());
 
         // With max_rotated = 8 it is reachable.
-        let out = read_recent_lines(dir.path(), &id, 10, 8).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 10, 0, 8).await.unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].line, " oldest");
     }
@@ -218,7 +237,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let id = TaskId::new();
         write_file(dir.path(), &format!("{}.log", id), &[&line("t1", "a")]).await;
-        let out = read_recent_lines(dir.path(), &id, 0, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 0, 0, 5).await.unwrap();
         assert!(out.is_empty());
     }
 
@@ -231,9 +250,77 @@ mod tests {
         f.write_all(b"[t1] [stderr] error: boom\n").await.unwrap();
         f.flush().await.unwrap();
 
-        let out = read_recent_lines(dir.path(), &id, 10, 5).await.unwrap();
+        let out = read_recent_lines(dir.path(), &id, 10, 0, 5).await.unwrap();
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0].stream, LogStream::Stderr));
         assert_eq!(out[0].line, " error: boom");
+    }
+
+    #[tokio::test]
+    async fn offset_walks_backwards_through_a_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        write_file(
+            dir.path(),
+            &format!("{}.log", id),
+            &[
+                &line("t1", "1"),
+                &line("t2", "2"),
+                &line("t3", "3"),
+                &line("t4", "4"),
+                &line("t5", "5"),
+                &line("t6", "6"),
+            ],
+        )
+        .await;
+
+        // Page size 2, paging from newest backwards.
+        let names = |out: Vec<LogEntry>| -> Vec<String> {
+            out.into_iter().map(|e| e.line).collect()
+        };
+
+        let page0 = read_recent_lines(dir.path(), &id, 2, 0, 5).await.unwrap();
+        assert_eq!(names(page0), vec![" 5", " 6"]);
+
+        let page1 = read_recent_lines(dir.path(), &id, 2, 2, 5).await.unwrap();
+        assert_eq!(names(page1), vec![" 3", " 4"]);
+
+        let page2 = read_recent_lines(dir.path(), &id, 2, 4, 5).await.unwrap();
+        assert_eq!(names(page2), vec![" 1", " 2"]);
+
+        // Beyond the start: nothing older remains.
+        let page3 = read_recent_lines(dir.path(), &id, 2, 6, 5).await.unwrap();
+        assert!(page3.is_empty());
+    }
+
+    #[tokio::test]
+    async fn offset_spans_rotated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        // Chronological: .log.1 (oldest) = 1,2 ; .log (newest) = 3,4.
+        write_file(dir.path(), &format!("{}.log.1", id), &[&line("t1", "1"), &line("t2", "2")]).await;
+        write_file(dir.path(), &format!("{}.log", id), &[&line("t3", "3"), &line("t4", "4")]).await;
+
+        // Skipping the newest 2 (the live file) must reach into the rotated file.
+        let older = read_recent_lines(dir.path(), &id, 2, 2, 5).await.unwrap();
+        let lines: Vec<&str> = older.iter().map(|e| e.line.as_str()).collect();
+        assert_eq!(lines, vec![" 1", " 2"]);
+    }
+
+    #[tokio::test]
+    async fn offset_partial_page_at_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        write_file(
+            dir.path(),
+            &format!("{}.log", id),
+            &[&line("t1", "1"), &line("t2", "2"), &line("t3", "3")],
+        )
+        .await;
+
+        // Only 1 line older than the newest 2 remains; a full page isn't possible.
+        let older = read_recent_lines(dir.path(), &id, 5, 2, 5).await.unwrap();
+        let lines: Vec<&str> = older.iter().map(|e| e.line.as_str()).collect();
+        assert_eq!(lines, vec![" 1"]);
     }
 }

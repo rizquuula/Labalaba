@@ -14,6 +14,10 @@ use crate::application::log::get_logs::GetLogs;
 pub struct LogsQuery {
     #[serde(default = "default_limit")]
     pub lines: usize,
+    /// Number of newest lines to skip — drives the "load older" pager.
+    /// `offset = 0` (the default) returns the most recent `lines`.
+    #[serde(default)]
+    pub offset: usize,
 }
 
 fn default_limit() -> usize { 500 }
@@ -35,7 +39,7 @@ pub async fn handler(
         Err(_) => return Json(ApiResponse::err("Invalid task ID")),
     };
     
-    match uc.execute(&task_id, query.lines).await {
+    match uc.execute(&task_id, query.lines, query.offset).await {
         Ok(logs) => Json(ApiResponse::ok(LogsResponse { logs })),
         Err(e) => Json(ApiResponse::err(format!("Failed to get logs: {}", e))),
     }

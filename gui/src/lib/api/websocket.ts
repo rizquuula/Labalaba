@@ -76,15 +76,20 @@ export async function connectLogStream(
   };
 }
 
-/** Fetches historical logs via HTTP API */
+/**
+ * Fetches a page of historical logs via the HTTP API. `offset` is the number of
+ * newest lines to skip — `offset = 0` returns the most recent `lines`, and
+ * increasing it walks backwards through history for a "load older" pager.
+ */
 export async function fetchHistoricalLogs(
   taskId: string,
   lines: number = 500,
+  offset: number = 0,
 ): Promise<LogEntry[]> {
   try {
     const conn = await getConnection();
     const response = await fetch(
-      `${conn.base_url}/api/logs/${taskId}?lines=${lines}`,
+      `${conn.base_url}/api/logs/${taskId}?lines=${lines}&offset=${offset}`,
       { headers: { Authorization: `Bearer ${conn.token}` } },
     );
     const json: { success: boolean; data: { logs: LogEntry[] } | null; error: string | null } =

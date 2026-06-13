@@ -160,7 +160,7 @@
         <div class="setting-row">
           <div class="setting-label-group">
             <p class="setting-name" id="label-log-buffer">Log Buffer (lines)</p>
-            <p class="setting-desc">Max log lines kept in memory per task</p>
+            <p class="setting-desc">Lines loaded when opening a log and kept in memory per task ("Load older" pages further back)</p>
           </div>
           <input class="input input-sm" id="setting-log-buffer" type="number" min="100" max="50000"
             aria-labelledby="label-log-buffer"

@@ -1,6 +1,4 @@
-// Tauri event listener — replaces the WebSocket layer for log streaming
-import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { getConnection } from './client';
 
 export interface LogEntry {
   task_id: string;
@@ -12,33 +10,89 @@ export interface LogEntry {
 export type LogListener = (entry: LogEntry) => void;
 
 /**
- * Subscribes to real-time log events for a task. Awaits listener registration
- * before resolving, so the caller can guarantee no lines are missed between the
- * history fetch and the listener attaching. Returns a cleanup function; calling
- * it before/after the listener resolves both correctly unlisten.
+ * Subscribes to real-time log events for a task over WebSocket with auto-reconnect.
+ * Awaits the first socket being created before resolving, so the caller can guarantee
+ * no lines are missed between the history fetch and the listener attaching.
+ * Returns a cleanup function; calling it stops reconnection and closes the socket.
  */
 export async function connectLogStream(
   taskId: string,
   onEntry: LogListener,
   onClose?: () => void,
 ): Promise<() => void> {
-  const unlisten = await listen<LogEntry>(`log:${taskId}`, (event) => {
-    onEntry(event.payload);
-  });
+  const conn = await getConnection();
+  const url = `${conn.ws_url}/ws/logs/${taskId}?token=${encodeURIComponent(conn.token)}`;
+
+  let socket: WebSocket | null = null;
+  let stopped = false;
+  let reconnectDelay = 1000;
+
+  function connect(): Promise<void> {
+    return new Promise((resolve) => {
+      const ws = new WebSocket(url);
+      socket = ws;
+
+      ws.onopen = () => {
+        reconnectDelay = 1000;
+        resolve();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const entry: LogEntry = JSON.parse(event.data as string);
+          onEntry(entry);
+        } catch {
+          // ignore unparseable messages
+        }
+      };
+
+      ws.onclose = () => {
+        socket = null;
+        // resolve in case open never fired (e.g. connection refused on first attempt)
+        resolve();
+        if (!stopped) {
+          const delay = reconnectDelay;
+          reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+          setTimeout(() => {
+            if (!stopped) {
+              connect();
+            }
+          }, delay);
+        }
+      };
+
+      ws.onerror = () => {
+        // onclose fires after onerror — let that drive reconnect
+      };
+    });
+  }
+
+  await connect();
 
   return () => {
-    unlisten();
+    stopped = true;
+    socket?.close();
     onClose?.();
   };
 }
 
-/** Fetches historical logs via Tauri command */
+/** Fetches historical logs via HTTP API */
 export async function fetchHistoricalLogs(
   taskId: string,
   lines: number = 500,
 ): Promise<LogEntry[]> {
   try {
-    return await invoke<LogEntry[]>('get_logs', { id: taskId, lines });
+    const conn = await getConnection();
+    const response = await fetch(
+      `${conn.base_url}/api/logs/${taskId}?lines=${lines}`,
+      { headers: { Authorization: `Bearer ${conn.token}` } },
+    );
+    const json: { success: boolean; data: { logs: LogEntry[] } | null; error: string | null } =
+      await response.json();
+    if (!json.success || !json.data) {
+      return [];
+    }
+    return json.data.logs ?? [];
   } catch (error) {
     console.error('Failed to fetch historical logs:', error);
     return [];

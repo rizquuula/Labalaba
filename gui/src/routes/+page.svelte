@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { listen } from '@tauri-apps/api/event';
   import TopBar from '$lib/components/TopBar.svelte';
   import TaskList from '$lib/components/TaskList.svelte';
   import TaskForm from '$lib/components/TaskForm.svelte';
@@ -24,34 +23,33 @@
   );
 
   let stopPolling: (() => void) | null = null;
+  let updatePollInterval: ReturnType<typeof setInterval> | null = null;
 
-  onMount(async () => {
-    await loadTasks();
-    stopPolling = startPolling();
-    
-    // Listen for update available events from daemon
-    const unlisten = await listen<UpdateInfo>('update-available', (event) => {
-      updateInfo = event.payload;
-    });
-
-    // Pull any update the background checker already found before the listener
-    // above was registered (the event may have fired early).
+  async function checkPendingUpdate() {
     try {
       const pending = await api.update.pending();
-      if (pending && pending.available && !updateInfo) {
+      if (pending && pending.available) {
         updateInfo = pending;
       }
     } catch (e) {
       console.error('Failed to fetch pending update:', e);
     }
+  }
 
-    // Cleanup listener on destroy
-    onDestroy(() => {
-      unlisten();
-    });
+  onMount(async () => {
+    await loadTasks();
+    stopPolling = startPolling();
+
+    await checkPendingUpdate();
+    updatePollInterval = setInterval(checkPendingUpdate, 60 * 60 * 1000);
   });
 
-  onDestroy(() => stopPolling?.());
+  onDestroy(() => {
+    stopPolling?.();
+    if (updatePollInterval !== null) {
+      clearInterval(updatePollInterval);
+    }
+  });
 
   function openAddForm() {
     editingTask = undefined;

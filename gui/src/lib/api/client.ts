@@ -1,4 +1,3 @@
-// Tauri command client — replaces the HTTP fetch layer
 import { invoke } from '@tauri-apps/api/core';
 
 export interface TaskConfig {
@@ -77,32 +76,78 @@ export interface TaskRequest {
   pids?: number[];
 }
 
+export interface DaemonConnection {
+  base_url: string;
+  ws_url: string;
+  token: string;
+}
+
+interface ApiResponse<T> {
+  success: boolean;
+  data: T | null;
+  error: string | null;
+}
+
+let connectionPromise: Promise<DaemonConnection> | null = null;
+
+export function getConnection(): Promise<DaemonConnection> {
+  if (!connectionPromise) {
+    connectionPromise = invoke<DaemonConnection>('get_daemon_connection');
+  }
+  return connectionPromise;
+}
+
+async function apiFetch<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const conn = await getConnection();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${conn.token}`,
+  };
+  if (body !== undefined) {
+    headers['content-type'] = 'application/json';
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(conn.base_url + path, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (err) {
+    throw new Error(`Network error: ${err}`);
+  }
+
+  const json: ApiResponse<T> = await response.json();
+  if (!json.success) {
+    throw new Error(json.error ?? 'request failed');
+  }
+  return json.data as T;
+}
+
 export const api = {
   tasks: {
-    list: () => invoke<TaskDto[]>('list_tasks'),
-    get: (id: string) => invoke<TaskDto>('get_task', { id }),
-    create: (req: TaskRequest) => invoke<TaskDto>('create_task', { req }),
-    update: (id: string, req: TaskRequest) => invoke<TaskDto>('update_task', { id, req }),
-    remove: (id: string) => invoke<void>('delete_task', { id }),
-    start: (id: string) => invoke<number>('start_task', { id }),
-    stop: (id: string) => invoke<void>('stop_task', { id }),
-    restart: (id: string) => invoke<number>('restart_task', { id }),
-    getStats: (id: string) => invoke<TaskResourceStats>('get_task_stats', { id }),
+    list: () => apiFetch<TaskDto[]>('GET', '/api/tasks'),
+    get: (id: string) => apiFetch<TaskDto>('GET', `/api/tasks/${id}`),
+    create: (req: TaskRequest) => apiFetch<TaskDto>('POST', '/api/tasks', req),
+    update: (id: string, req: TaskRequest) => apiFetch<TaskDto>('PUT', `/api/tasks/${id}`, req),
+    remove: (id: string) => apiFetch<null>('DELETE', `/api/tasks/${id}`),
+    start: (id: string) => apiFetch<number>('POST', `/api/tasks/${id}/start`),
+    stop: (id: string) => apiFetch<null>('POST', `/api/tasks/${id}/stop`),
+    restart: (id: string) => apiFetch<number>('POST', `/api/tasks/${id}/restart`),
+    getStats: (id: string) => apiFetch<TaskResourceStats>('GET', `/api/tasks/${id}/stats`),
   },
-  stats: () => invoke<TaskStats>('get_stats'),
+  stats: () => apiFetch<TaskStats>('GET', '/api/stats'),
   settings: {
-    get: () => invoke<AppSettings>('get_settings'),
-    update: (settings: AppSettings) => invoke<AppSettings>('update_settings', { settings }),
+    get: () => apiFetch<AppSettings>('GET', '/api/settings'),
+    update: (settings: AppSettings) => apiFetch<AppSettings>('PUT', '/api/settings', settings),
   },
   update: {
-    check: () => invoke<UpdateInfo>('check_update'),
-    pending: () => invoke<UpdateInfo | null>('get_pending_update'),
+    check: () => apiFetch<UpdateInfo>('POST', '/api/update/check'),
+    pending: () => apiFetch<UpdateInfo | null>('GET', '/api/update/pending'),
   },
   system: {
-    // Resolve an installed interpreter for a script kind. 'sh'/'bash'/'zsh' on
-    // macOS/Linux; 'ps1'/'bat' on Windows. Returns null when none is found.
     detectInterpreter: (kind: 'sh' | 'bash' | 'zsh' | 'ps1' | 'bat') =>
-      invoke<string | null>('detect_interpreter', { kind }),
+      apiFetch<string | null>('POST', '/api/system/detect-interpreter', { kind }),
   },
 };
 

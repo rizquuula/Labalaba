@@ -66,13 +66,33 @@
     return env;
   }
 
+  function detectOs(): 'windows' | 'macos' | 'linux' {
+    const ua = navigator.userAgent;
+    if (ua.includes('Windows')) return 'windows';
+    if (ua.includes('Mac')) return 'macos';
+    return 'linux';
+  }
+
+  // Filters are platform-aware: Windows executables carry extensions, but native
+  // binaries on macOS/Linux usually have none, so we show all files there rather
+  // than hide them behind an extension filter.
+  function executableFilters(): { name: string; extensions: string[] }[] | undefined {
+    if (scriptType === 'python') {
+      return [{ name: 'Python Script', extensions: ['py', 'pyw'] }];
+    }
+    switch (detectOs()) {
+      case 'windows':
+        return [{ name: 'Executable', extensions: ['exe', 'bat', 'cmd', 'ps1'] }];
+      default:
+        // macOS / Linux: no filter so extension-less binaries remain selectable.
+        return undefined;
+    }
+  }
+
   async function pickExecutable() {
     const selected = await open({
       multiple: false,
-      filters: [{
-        name: scriptType === 'python' ? 'Python Script' : 'Executable',
-        extensions: scriptType === 'python' ? ['py'] : ['exe', 'bat', 'cmd', 'ps1']
-      }]
+      filters: executableFilters()
     });
     if (selected && typeof selected === 'string') {
       executable = selected;

@@ -12,6 +12,52 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // ── Subcommand: cleanup ───────────────────────────────────────────────────
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("cleanup") {
+        let mut purge = false;
+        let mut yes = false;
+        for arg in args.iter().skip(2) {
+            match arg.as_str() {
+                "--purge" => purge = true,
+                "--yes" => yes = true,
+                other => {
+                    eprintln!("Unknown flag: {other}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        if purge && !yes {
+            use std::io::IsTerminal;
+            if std::io::stdin().is_terminal() {
+                let data_dir = labalaba_daemon::data_dir();
+                eprintln!(
+                    "WARNING: This will permanently delete data files in {}.",
+                    data_dir.display()
+                );
+                eprint!("Type 'y' or 'yes' to confirm: ");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                let trimmed = input.trim().to_lowercase();
+                if trimmed != "y" && trimmed != "yes" {
+                    eprintln!("Aborted.");
+                    std::process::exit(1);
+                }
+            } else {
+                eprintln!(
+                    "Error: refusing to purge user data without --yes (stdin is not a terminal)"
+                );
+                std::process::exit(1);
+            }
+        }
+
+        labalaba_daemon::cleanup(purge).await?;
+        println!("Cleanup complete.");
+        return Ok(());
+    }
+
+    // ── Normal server startup ─────────────────────────────────────────────────
     let state = init_app_state(None, None).await?;
     let port = state.settings.read().await.daemon_port;
 

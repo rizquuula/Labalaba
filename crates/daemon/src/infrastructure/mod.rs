@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod autostart;
 pub mod persistence;
 pub mod process;
 pub mod log;

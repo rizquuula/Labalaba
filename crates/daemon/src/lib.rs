@@ -2,6 +2,9 @@ pub mod domain;
 pub mod application;
 pub mod infrastructure;
 pub mod interface;
+pub mod cleanup;
+
+pub use cleanup::{cleanup, purge_user_data, stop_running_daemon};
 
 use std::sync::Arc;
 use std::path::{Path, PathBuf};

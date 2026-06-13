@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "labalaba-daemon"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "labalaba-gui"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -2128,7 +2128,7 @@ dependencies = [
 
 [[package]]
 name = "labalaba-shared"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "chrono",

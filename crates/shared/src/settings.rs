@@ -95,11 +95,11 @@ fn default_log_dir() -> String {
 }
 
 fn default_log_max_file_size_mb() -> usize {
-    10
+    8
 }
 
 fn default_log_max_rotated_files() -> usize {
-    5
+    3
 }
 
 #[cfg(test)]
@@ -123,8 +123,8 @@ mod tests {
         assert_eq!(settings.update_check_interval_hours, 24);
         assert!(!settings.launch_on_startup);
         assert_eq!(settings.log_dir, "./logs");
-        assert_eq!(settings.log_max_file_size_mb, 10);
-        assert_eq!(settings.log_max_rotated_files, 5);
+        assert_eq!(settings.log_max_file_size_mb, 8);
+        assert_eq!(settings.log_max_rotated_files, 3);
     }
 
     #[test]

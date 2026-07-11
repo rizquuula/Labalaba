@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { focusTrap } from '$lib/actions/focusTrap';
+  import { portal } from '$lib/actions/portal';
   import { open } from '@tauri-apps/plugin-dialog';
   import { api, type TaskDto, type TaskRequest, taskId } from '$lib/api/client';
   import { loadTasks } from '$lib/stores/tasks';
@@ -203,7 +204,7 @@
   }
 </script>
 
-<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }}>
+<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }} use:portal>
   <div class="modal glass-strong">
     <div class="modal-header">
       <h2 id={modalHeadingId}>{isEdit ? 'Edit Task' : 'New Task'}</h2>

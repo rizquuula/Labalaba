@@ -4,6 +4,7 @@
   import { api, type UpdateInfo } from '$lib/api/client';
   import { theme } from '$lib/stores/theme';
   import { focusTrap } from '$lib/actions/focusTrap';
+  import { portal } from '$lib/actions/portal';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -110,7 +111,7 @@
   }
 </script>
 
-<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }}>
+<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby={modalHeadingId} use:focusTrap={{ onClose }} use:portal>
   <div class="modal glass-strong">
     <div class="modal-header">
       <h2 id={modalHeadingId}>Settings</h2>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { focusTrap } from '$lib/actions/focusTrap';
+  import { portal } from '$lib/actions/portal';
 
   let {
     title,
@@ -31,7 +32,7 @@
   }
 </script>
 
-<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" use:focusTrap={{ onClose: onCancel }}>
+<div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" use:focusTrap={{ onClose: onCancel }} use:portal>
   <div class="modal glass-strong">
     <div class="modal-header">
       <h2 id="confirm-dialog-title">{title}</h2>

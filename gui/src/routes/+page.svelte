@@ -11,6 +11,7 @@
   import type { TaskDto } from '$lib/api/client';
   import type { UpdateInfo } from '$lib/api/client';
   import { focusTrap } from '$lib/actions/focusTrap';
+  import { portal } from '$lib/actions/portal';
 
   // Modal state
   let showForm = $state(false);
@@ -107,7 +108,7 @@
 {/if}
 
 {#if updateInfo}
-  <div class="update-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-modal-title" use:focusTrap={{ onClose: dismissUpdate }}>
+  <div class="update-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="update-modal-title" use:focusTrap={{ onClose: dismissUpdate }} use:portal>
     <div class="update-modal glass-strong">
       <div class="modal-header">
         <h2 id="update-modal-title">New Version Available</h2>

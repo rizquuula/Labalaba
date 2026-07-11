@@ -1,9 +1,64 @@
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
 use labalaba_shared::task::TaskId;
 use labalaba_shared::api::LogStream;
 use crate::domain::log::entity::{make_log_entry, new_log_channel};
 use crate::infrastructure::state::AppState;
+
+/// Strip ANSI escape sequences (CSI/SGR color codes, OSC, and simple two-byte
+/// escapes) from a line. Children switch to emitting these once a PTY makes them
+/// believe they are on a terminal; the log viewer wants plain text.
+fn strip_ansi(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0x1b {
+            // ESC
+            i += 1;
+            if i >= bytes.len() {
+                break;
+            }
+            match bytes[i] {
+                b'[' => {
+                    // CSI: parameter/intermediate bytes until a final byte in @..~
+                    i += 1;
+                    while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    if i < bytes.len() {
+                        i += 1; // consume the final byte
+                    }
+                }
+                b']' => {
+                    // OSC: terminated by BEL (0x07) or ST (ESC \)
+                    i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        }
+                        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    // Other escape (e.g. ESC c): skip the single following byte.
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(b);
+            i += 1;
+        }
+    }
+    // `out` only ever contains bytes copied verbatim from valid UTF-8 input
+    // (escape sequences are pure ASCII), so this is lossless in practice.
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 pub struct StartTask {
     pub state: Arc<AppState>,
@@ -68,35 +123,41 @@ impl StartTask {
 
         let log_cb = self.state.log_event_callback.clone();
 
-        // Spawn stdout collector
-        if let Some(stdout) = handle.child.stdout.take() {
+        // The PTY merges stdout+stderr into one blocking reader. Read it on a
+        // dedicated OS thread (blocking I/O must not run on the async runtime),
+        // strip ANSI escapes, and hand each line to the async side over an mpsc
+        // channel. The thread exits on EOF/Err so it can't leak across restarts.
+        if let Some(reader) = handle.output.take() {
+            let (line_tx, mut line_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let buf = std::io::BufReader::new(reader);
+                for line in buf.lines() {
+                    match line {
+                        Ok(line) => {
+                            if line_tx.send(strip_ansi(&line)).is_err() {
+                                break; // receiver gone
+                            }
+                        }
+                        Err(_) => break, // EOF (or EIO on PTY close) — stop reading
+                    }
+                }
+                // Dropping `line_tx` here closes the channel and ends the drainer.
+            });
+
             let tx = broadcaster.clone();
             let id_out = id.clone();
             let writer = log_writer.clone();
             let cb = log_cb.clone();
             tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                // Every captured line is tagged Stdout because the PTY merges the
+                // two streams; the per-line broadcast + persist + callback logic
+                // is otherwise unchanged.
+                while let Some(line) = line_rx.recv().await {
                     let entry = make_log_entry(&id_out, LogStream::Stdout, line);
                     let _ = tx.send(entry.clone());
                     let _ = writer.write(&id_out, &entry).await;
-                    if let Some(ref cb) = cb { cb(entry); }
-                }
-            });
-        }
-
-        // Spawn stderr collector
-        if let Some(stderr) = handle.child.stderr.take() {
-            let tx = broadcaster.clone();
-            let id_err = id.clone();
-            let writer = log_writer.clone();
-            let cb = log_cb.clone();
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(stderr).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let entry = make_log_entry(&id_err, LogStream::Stderr, line);
-                    let _ = tx.send(entry.clone());
-                    let _ = writer.write(&id_err, &entry).await;
                     if let Some(ref cb) = cb { cb(entry); }
                 }
             });
@@ -108,9 +169,12 @@ impl StartTask {
         let restart_tx = self.state.restart_tx.clone();
         let log_writer = self.state.log_writer.clone();
         let id_clone = id.clone();
+        // Move the waiter out of the (now output-drained) handle so the exit
+        // watcher owns it. The waiter yields the exit code across both spawn
+        // backends (PTY child / tokio child).
+        let waiter = handle.waiter;
         tokio::spawn(async move {
-            let exit_status = handle.child.wait().await.ok();
-            let exit_code = exit_status.and_then(|s| s.code());
+            let exit_code = waiter.wait().await;
             let nonzero_exit = exit_code.map(|c| c != 0).unwrap_or(true);
 
             // Decide how to react under a single critical section: a deliberate
@@ -184,5 +248,34 @@ impl StartTask {
         });
 
         Ok(pid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_ansi;
+
+    #[test]
+    fn test_strip_ansi_sgr() {
+        assert_eq!(strip_ansi("\x1b[31mred\x1b[0m"), "red");
+    }
+
+    #[test]
+    fn test_strip_ansi_plain_passthrough() {
+        assert_eq!(strip_ansi("plain text"), "plain text");
+    }
+
+    #[test]
+    fn test_strip_ansi_multiple_codes() {
+        assert_eq!(
+            strip_ansi("\x1b[1m\x1b[32mok\x1b[0m done\x1b[0m"),
+            "ok done"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_and_utf8() {
+        // OSC title sequence terminated by BEL, plus a multibyte char preserved.
+        assert_eq!(strip_ansi("\x1b]0;title\x07caf\u{e9}"), "caf\u{e9}");
     }
 }

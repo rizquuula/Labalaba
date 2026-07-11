@@ -2,7 +2,7 @@
 /// Because the elevated process runs in a separate session, we cannot capture its stdout/stderr
 /// directly. Instead we spawn an intermediate batch helper that pipes output to a named pipe
 /// or temp file. For now we launch detached and log a notice.
-use crate::domain::process::entity::ProcessHandle;
+use crate::domain::process::entity::{ProcessHandle, ProcessWaiter};
 use crate::domain::task::entity::Task;
 use tokio::process::Command;
 
@@ -27,5 +27,7 @@ pub async fn spawn_as_admin(task: &Task) -> anyhow::Result<ProcessHandle> {
         .ok_or_else(|| anyhow::anyhow!("Failed to get PID for elevated process"))?;
 
     tracing::info!("Launched elevated process via PowerShell, wrapper PID={}", pid);
-    Ok(ProcessHandle { pid, child })
+    // Elevated processes run in a separate session; we do not capture their
+    // output live (no PTY), so `output` is None and we wait via the tokio child.
+    Ok(ProcessHandle { pid, output: None, waiter: ProcessWaiter::Tokio(child) })
 }

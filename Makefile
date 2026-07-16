@@ -5,11 +5,12 @@
 VERSION     := $(shell node -e "const fs=require('fs');console.log(JSON.parse(fs.readFileSync('gui/src-tauri/tauri.conf.json')).version)")
 TARGET_DIR  := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(CURDIR)/target)
 HOST_TRIPLE := $(shell rustc -vV | sed -n 's/host: //p')
+EXE         := $(if $(findstring windows,$(HOST_TRIPLE)),.exe,)
 
 # - Dev ---------------------------------
 
 dev: sidecar-dev ## Start Tauri app (daemon + GUI with hot-reload)
-	cd gui && LABALABA_DATA_DIR="$(CURDIR)" LABALABA_DAEMON_BIN="$(TARGET_DIR)/debug/labalaba-daemon" npm run tauri dev
+	cd gui && LABALABA_DATA_DIR="$(CURDIR)" LABALABA_DAEMON_BIN="$(TARGET_DIR)/debug/labalaba-daemon$(EXE)" npm run tauri dev
 
 stop: ## Kill all dev processes (daemon + Tauri)
 	@powershell -ExecutionPolicy Bypass -File scripts/stop.ps1
@@ -40,12 +41,12 @@ build-be: ## Build backend only (release)
 sidecar: ## Build the daemon and stage it as a Tauri sidecar (release, host target)
 	cargo build -p labalaba-daemon --release
 	@mkdir -p gui/src-tauri/binaries
-	cp "$(TARGET_DIR)/release/labalaba-daemon" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)"
+	cp "$(TARGET_DIR)/release/labalaba-daemon$(EXE)" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)$(EXE)"
 
 sidecar-dev: ## Build the daemon (debug) and stage it as a sidecar for `tauri dev`
 	cargo build -p labalaba-daemon
 	@mkdir -p gui/src-tauri/binaries
-	cp "$(TARGET_DIR)/debug/labalaba-daemon" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)"
+	cp "$(TARGET_DIR)/debug/labalaba-daemon$(EXE)" "gui/src-tauri/binaries/labalaba-daemon-$(HOST_TRIPLE)$(EXE)"
 
 check: ## Svelte + TypeScript validation
 	cd gui && npm run check

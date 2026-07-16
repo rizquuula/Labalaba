@@ -1,6 +1,6 @@
 [package]
 name = "labalaba-gui"
-version = "1.2.4"
+version = "1.2.5"
 description = "Labalaba - Process Manager GUI"
 authors = ["you"]
 edition = "2021"

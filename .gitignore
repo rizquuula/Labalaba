@@ -7,6 +7,7 @@ gui/src-tauri/binaries/
 .env
 dist/
 .tauri/
+tmp_*
 
 # docs/plans tracked intentionally
 .claude

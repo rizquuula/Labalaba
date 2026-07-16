@@ -2113,6 +2113,7 @@ dependencies = [
  "chrono",
  "cron",
  "dirs 5.0.1",
+ "filedescriptor",
  "futures-util",
  "labalaba-shared",
  "libc",

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{Manager, RunEvent};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use commands::daemon::{DaemonHandle, start_or_connect_daemon};
+use commands::daemon::{DaemonHandle, connect_in_background};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,20 +30,12 @@ pub fn run() {
             // anything else touches the daemon.
             commands::daemon::restore_autostart_after_update();
 
-            // Daemon lifecycle
-            match start_or_connect_daemon() {
-                Ok((conn, child)) => {
-                    let handle = DaemonHandle {
-                        connection: std::sync::Mutex::new(Some(conn)),
-                        child: std::sync::Mutex::new(child),
-                    };
-                    app.manage(handle);
-                }
-                Err(e) => {
-                    eprintln!("Failed to connect to daemon: {e}");
-                    app.manage(DaemonHandle::default());
-                }
-            }
+            // Daemon lifecycle. Managed empty and filled in off-thread: setup
+            // runs before the event loop starts, so connecting here would leave
+            // the window unpainted for as long as it takes. `get_daemon_connection`
+            // waits for the result, so the frontend still just awaits it once.
+            app.manage(DaemonHandle::default());
+            connect_in_background(app.handle().clone());
 
             // Tray icon
             let quitting_quit = Arc::clone(&quitting);
@@ -115,8 +107,22 @@ pub fn run() {
         .run(|app_handle, event| {
             if let RunEvent::Exit = event {
                 if let Some(handle) = app_handle.try_state::<DaemonHandle>() {
-                    if let Some(mut child) = handle.child.lock().unwrap().take() {
-                        let _ = child.kill();
+                    let child = handle.child.lock().unwrap().take();
+                    if let Some(mut child) = child {
+                        // Ask it to exit cleanly rather than TerminateProcess-ing
+                        // it: only the graceful path flushes the log writers, and
+                        // tokio's BufWriter does not flush on drop, so a hard kill
+                        // silently drops each task's most recent output.
+                        //
+                        // Running tasks are deliberately left alive — the daemon's
+                        // shutdown does not touch them, and recover_task_states
+                        // re-adopts them on the next launch.
+                        let _ = tauri::async_runtime::block_on(
+                            labalaba_daemon::stop_running_daemon(),
+                        );
+                        if matches!(child.try_wait(), Ok(None)) {
+                            let _ = child.kill();
+                        }
                         let _ = child.wait();
                     }
                 }

@@ -1,7 +1,9 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
+
+use labalaba_daemon::infrastructure::net::{probe_port, PortState};
+use tauri::Manager;
 
 #[derive(Clone, serde::Serialize)]
 pub struct DaemonConnection {
@@ -13,6 +15,10 @@ pub struct DaemonConnection {
 pub struct DaemonHandle {
     pub connection: Mutex<Option<DaemonConnection>>,
     pub child: Mutex<Option<std::process::Child>>,
+    /// Why the last connection attempt failed, if it did. Lets
+    /// `get_daemon_connection` report the real reason instead of timing out on a
+    /// connect that already gave up.
+    pub error: Mutex<Option<String>>,
 }
 
 impl Default for DaemonHandle {
@@ -20,8 +26,37 @@ impl Default for DaemonHandle {
         Self {
             connection: Mutex::new(None),
             child: Mutex::new(None),
+            error: Mutex::new(None),
         }
     }
+}
+
+/// Connect to (or start) the daemon and publish the result into the managed
+/// [`DaemonHandle`].
+///
+/// Runs off the main thread: `start_or_connect_daemon` can take ~20s in the bad
+/// cases (reclaiming a port, waiting for a spawn), and Tauri's `setup` hook runs
+/// before the event loop starts — blocking there leaves an unpainted window and
+/// wedges `tauri_plugin_single_instance`, whose Windows `SendMessageW` has no
+/// timeout and hangs every later launch until we pump messages again.
+pub fn connect_in_background(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let result = start_or_connect_daemon();
+        let state = app.state::<DaemonHandle>();
+        match result {
+            Ok((conn, child)) => {
+                *state.connection.lock().unwrap() = Some(conn);
+                *state.child.lock().unwrap() = child;
+                *state.error.lock().unwrap() = None;
+            }
+            Err(e) => {
+                // Release builds set windows_subsystem = "windows", so this
+                // reaches no console — the error is surfaced through the handle.
+                eprintln!("Failed to connect to daemon: {e}");
+                *state.error.lock().unwrap() = Some(e.to_string());
+            }
+        }
+    });
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -42,10 +77,18 @@ pub fn daemon_status() -> DaemonStatus {
 
 #[tauri::command]
 pub fn start_daemon(state: tauri::State<'_, DaemonHandle>) -> Result<(), String> {
-    let (conn, child) = start_or_connect_daemon().map_err(|e| e.to_string())?;
+    let (conn, child) = start_or_connect_daemon().map_err(|e| {
+        let msg = e.to_string();
+        *state.error.lock().unwrap() = Some(msg.clone());
+        msg
+    })?;
     *state.connection.lock().unwrap() = Some(conn);
+    *state.error.lock().unwrap() = None;
     let mut guard = state.child.lock().unwrap();
     if let Some(mut old) = guard.take() {
+        // Reap it if it has already exited. Not killed: either `reclaim_port`
+        // just stopped it, or `start_or_connect_daemon` reused it and it is the
+        // daemon we are now connected to.
         let _ = old.try_wait();
     }
     *guard = child;
@@ -142,21 +185,46 @@ pub(crate) fn restore_autostart_after_update() {
     }
 }
 
+/// How long the frontend's first call waits for the background connect. Must
+/// exceed the worst case inside `start_or_connect_daemon` (~20s: health probe,
+/// port reclaim, spawn readiness, token read).
+const CONNECT_WAIT: Duration = Duration::from_secs(30);
+const CONNECT_POLL: Duration = Duration::from_millis(100);
+
+/// Await the connection established by [`connect_in_background`].
+///
+/// `async` on purpose: Tauri runs sync commands on the main thread, so blocking
+/// here would freeze the very window this wait exists to keep responsive.
 #[tauri::command]
-pub fn get_daemon_connection(
+pub async fn get_daemon_connection(
     state: tauri::State<'_, DaemonHandle>,
 ) -> Result<DaemonConnection, String> {
-    state
-        .connection
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "daemon not connected".into())
+    let deadline = std::time::Instant::now() + CONNECT_WAIT;
+    loop {
+        // Scoped so no std MutexGuard is held across an await.
+        {
+            if let Some(conn) = state.connection.lock().unwrap().clone() {
+                return Ok(conn);
+            }
+            if let Some(err) = state.error.lock().unwrap().clone() {
+                return Err(err);
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("timed out waiting for the daemon to start".into());
+        }
+        tokio::time::sleep(CONNECT_POLL).await;
+    }
 }
 
+/// Whether something is answering on `port`.
+///
+/// Only asks "is a server there?". It cannot tell a free port from one that is
+/// bound but refusing connections — use
+/// [`probe_port`](labalaba_daemon::infrastructure::net::probe_port) where that
+/// distinction matters, i.e. before deciding to spawn a daemon.
 fn is_listening(port: u16) -> bool {
-    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    labalaba_daemon::infrastructure::net::is_connectable(port)
 }
 
 /// Best-effort: stop whatever Labalaba daemon is holding `port` and wait for it
@@ -245,18 +313,50 @@ pub fn start_or_connect_daemon() -> anyhow::Result<(DaemonConnection, Option<std
     // one being torn down mid-upgrade. Both of those used to hang the UI.
     let bundled_version = env!("CARGO_PKG_VERSION");
     let mut reuse = false;
-    if is_listening(port) {
-        match tauri::async_runtime::block_on(labalaba_daemon::daemon_health(port)) {
-            Some(ref v) if v == bundled_version => reuse = true,
-            Some(v) => eprintln!(
-                "daemon on port {port} reports version {v}, expected {bundled_version}; restarting it"
-            ),
-            None => eprintln!(
-                "a process holds port {port} but /api/health did not respond; reclaiming it"
-            ),
+    match probe_port(port) {
+        // Nothing holds it — go straight to spawning.
+        PortState::Free => {}
+
+        PortState::Serving => {
+            match tauri::async_runtime::block_on(labalaba_daemon::daemon_health(port)) {
+                Some(ref v) if v == bundled_version => reuse = true,
+                Some(v) => eprintln!(
+                    "daemon on port {port} reports version {v}, expected {bundled_version}; restarting it"
+                ),
+                None => eprintln!(
+                    "a process holds port {port} but /api/health did not respond; reclaiming it"
+                ),
+            }
+            if !reuse {
+                reclaim_port(port);
+            }
         }
-        if !reuse {
-            reclaim_port(port);
+
+        // Bound but refusing connections: a task is holding a dead daemon's
+        // inherited listener socket. Nothing can bind until that task dies, so
+        // spawning here would fail with an unbindable port and surface as a
+        // silent "daemon did not become reachable".
+        PortState::Blocked => {
+            let killed =
+                tauri::async_runtime::block_on(labalaba_daemon::reclaim_port_from_orphan_tasks(port));
+            if probe_port(port) == PortState::Blocked {
+                let detail = if killed.is_empty() {
+                    "no Labalaba task owns it".to_string()
+                } else {
+                    format!("it stayed blocked after killing {} orphaned task(s)", killed.len())
+                };
+                anyhow::bail!(
+                    "port {port} is bound but refusing connections and {detail} — another \
+                     application may be using it. Close it, or change daemon_port in settings."
+                );
+            }
+            if !killed.is_empty() {
+                eprintln!(
+                    "freed port {port} by killing {} orphaned task process(es) left by a \
+                     previous daemon",
+                    killed.len()
+                );
+            }
         }
     }
 
@@ -276,7 +376,7 @@ pub fn start_or_connect_daemon() -> anyhow::Result<(DaemonConnection, Option<std
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let child = cmd.spawn()?;
+        let mut child = cmd.spawn()?;
 
         let mut ready = false;
         for _ in 0..50 {
@@ -287,6 +387,11 @@ pub fn start_or_connect_daemon() -> anyhow::Result<(DaemonConnection, Option<std
             }
         }
         if !ready {
+            // `Child::drop` does not kill the process. Leaving it would let a
+            // daemon we've given up on keep initialising and bind the port
+            // behind our back, so every failed launch would strand one more.
+            let _ = child.kill();
+            let _ = child.wait();
             anyhow::bail!("daemon did not become reachable on port {port} within 5 seconds");
         }
 

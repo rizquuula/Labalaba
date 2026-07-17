@@ -70,6 +70,13 @@ async fn main() -> anyhow::Result<()> {
     let app = router::build(Arc::clone(&state));
     let addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    // Before any task is spawned: tasks inherit every inheritable handle we own,
+    // and an inherited listener keeps this port bound after we exit — bricking
+    // every later daemon's bind. See infrastructure::net.
+    #[cfg(windows)]
+    labalaba_daemon::infrastructure::net::disable_handle_inheritance(&listener)?;
+
     tracing::info!("Labalaba daemon listening on http://{}", addr);
 
     axum::serve(listener, app)

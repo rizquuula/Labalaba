@@ -53,6 +53,28 @@ fn file_stem(raw: &str) -> Option<String> {
 /// `expected_stem` is the value of [`expected_process_stem`] for the task,
 /// computed once by the caller. When it is `None` (no usable name) we fall
 /// back to a plain liveness check, since there is nothing to compare against.
+///
+/// Windows answers liveness and identity from a single `tasklist` spawn: the
+/// query already returns the image name. Spawning it twice doubled the cost of
+/// startup recovery — which runs before the daemon binds its port — and of every
+/// recovery watcher poll thereafter.
+#[cfg(target_os = "windows")]
+pub fn is_task_process_alive(pid: u32, expected_stem: Option<&str>) -> bool {
+    let Some(image_name) = query_tasklist(pid) else {
+        return false;
+    };
+    match expected_stem {
+        Some(stem) => image_name_matches(&image_name, stem),
+        None => true,
+    }
+}
+
+/// Check whether `pid` is alive AND (best effort) belongs to `task`.
+///
+/// `expected_stem` is the value of [`expected_process_stem`] for the task,
+/// computed once by the caller. When it is `None` (no usable name) we fall
+/// back to a plain liveness check, since there is nothing to compare against.
+#[cfg(not(target_os = "windows"))]
 pub fn is_task_process_alive(pid: u32, expected_stem: Option<&str>) -> bool {
     if !pid_is_alive(pid) {
         return false;
@@ -63,11 +85,6 @@ pub fn is_task_process_alive(pid: u32, expected_stem: Option<&str>) -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn pid_is_alive(pid: u32) -> bool {
-    query_tasklist(pid).is_some()
-}
-
 #[cfg(not(target_os = "windows"))]
 fn pid_is_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
@@ -76,14 +93,6 @@ fn pid_is_alive(pid: u32) -> bool {
 /// Best-effort identity check: does the live process named `pid` look like it
 /// is running `expected_stem`? Conservative — returns `false` when identity
 /// cannot be determined on a platform that supports the check.
-#[cfg(target_os = "windows")]
-fn process_identity_matches(pid: u32, expected_stem: &str) -> bool {
-    match query_tasklist(pid) {
-        Some(image_name) => image_name_matches(&image_name, expected_stem),
-        None => false,
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn process_identity_matches(pid: u32, expected_stem: &str) -> bool {
     match read_proc_identity(pid) {

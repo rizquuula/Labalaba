@@ -4,7 +4,9 @@ pub mod infrastructure;
 pub mod interface;
 pub mod cleanup;
 
-pub use cleanup::{cleanup, daemon_health, purge_user_data, stop_running_daemon};
+pub use cleanup::{
+    cleanup, daemon_health, purge_user_data, reclaim_port_from_orphan_tasks, stop_running_daemon,
+};
 
 use std::sync::Arc;
 use std::path::{Path, PathBuf};

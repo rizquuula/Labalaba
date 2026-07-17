@@ -85,6 +85,85 @@ pub async fn daemon_health(port: u16) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Free `port` when it is [`Blocked`](crate::infrastructure::net::PortState::Blocked)
+/// by a task holding a dead daemon's inherited listener socket.
+///
+/// A daemon that exits without stopping its tasks used to leak its listening
+/// socket into every task it had spawned (see
+/// [`disable_handle_inheritance`](crate::infrastructure::net::disable_handle_inheritance)).
+/// The socket outlives the daemon, so the port stays bound while refusing
+/// connections: no later daemon can bind it and the GUI never reaches
+/// `/api/health`. The install is bricked until the task is killed by hand.
+///
+/// The TCP table cannot name the culprit — it still attributes the socket to the
+/// pid of the daemon that created it, which no longer exists — so the only
+/// candidates are the task pids the previous daemon persisted. Kills them one at
+/// a time, re-probing after each, and stops as soon as the port frees, so tasks
+/// that happen not to hold it are left running.
+///
+/// No-op unless the port is genuinely `Blocked`: a healthy daemon (`Serving`) or
+/// a free port is never touched, and neither is a foreign process's port — only
+/// pids that still match their own task's executable are killed.
+///
+/// Daemons built after the inheritance fix cannot produce this state; this
+/// recovers installs bricked by an older one. Returns the pids killed.
+pub async fn reclaim_port_from_orphan_tasks(port: u16) -> Vec<u32> {
+    use crate::domain::process::service::ProcessSpawner;
+    use crate::infrastructure::net::{probe_port, PortState};
+    use crate::infrastructure::persistence::yaml_repository::YamlTaskRepository;
+    use crate::infrastructure::process::liveness::expected_process_stem;
+    use crate::domain::task::repository::TaskRepository;
+
+    let mut killed = Vec::new();
+    if probe_port(port) != PortState::Blocked {
+        return killed;
+    }
+
+    let (settings, _) = crate::load_settings().await;
+    let repo = YamlTaskRepository::new(crate::resolve(&crate::data_dir(), &settings.config_path));
+    let tasks = match repo.find_all().await {
+        Ok(tasks) => tasks,
+        Err(e) => {
+            tracing::warn!("port {port} is blocked but tasks could not be read: {e}");
+            return killed;
+        }
+    };
+
+    let spawner = crate::infrastructure::process::spawner::OsProcessSpawner;
+    for task in tasks {
+        let stem = expected_process_stem(&task);
+        for pid in &task.pids {
+            // Identity-checked: never kill a recycled pid now owned by something else.
+            if !crate::is_process_running(*pid, stem.as_deref()) {
+                continue;
+            }
+            tracing::warn!(
+                "port {port} is held by a leaked listener socket from a dead daemon; \
+                 killing orphaned task process {pid} ({})",
+                task.description
+            );
+            if let Err(e) = spawner.kill_tree(*pid).await {
+                tracing::warn!("could not kill orphaned pid {pid}: {e}");
+                continue;
+            }
+            killed.push(*pid);
+
+            // Closing the last handle is what releases the address; give the OS
+            // a moment before asking again.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if probe_port(port) != PortState::Blocked {
+                tracing::info!("port {port} released after killing {} orphan(s)", killed.len());
+                return killed;
+            }
+        }
+    }
+
+    if !killed.is_empty() {
+        tracing::warn!("port {port} is still blocked after killing {} orphan(s)", killed.len());
+    }
+    killed
+}
+
 fn is_connection_refused(e: &reqwest::Error) -> bool {
     use std::error::Error as StdError;
     // Walk the error chain looking for a ConnectionRefused io error.

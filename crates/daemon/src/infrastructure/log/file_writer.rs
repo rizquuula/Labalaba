@@ -11,6 +11,8 @@ use labalaba_shared::api::LogEntry;
 const FLUSH_EVERY_LINES: u64 = 50;
 /// Flush the buffer once this long has elapsed since the last flush.
 const FLUSH_EVERY: Duration = Duration::from_millis(500);
+/// How often the background flusher re-checks for buffers past `FLUSH_EVERY`.
+const FLUSH_TICK: Duration = Duration::from_millis(250);
 
 /// Runtime-tunable log config. Held behind a `Mutex` on the writer so a settings
 /// update can change rotation behaviour without restarting the daemon. `log_dir`
@@ -90,7 +92,10 @@ impl LogFileWriter {
         cfg.max_rotated_files = max_rotated_files;
     }
 
-    async fn log_dir(&self) -> PathBuf {
+    /// The resolved directory this writer logs into. Public so readers (the
+    /// history fetch in `get_logs`) resolve the same path the writer uses
+    /// instead of re-deriving it from raw settings and disagreeing.
+    pub async fn log_dir(&self) -> PathBuf {
         self.config.lock().await.log_dir.clone()
     }
 
@@ -226,6 +231,43 @@ impl LogFileWriter {
         Ok(())
     }
 
+    /// Flush every open writer whose buffered lines have been waiting at least
+    /// `FLUSH_EVERY`. Drives the time half of the flush policy, which `write`
+    /// alone cannot: `maybe_flush` only runs *from a write*, so a task that logs
+    /// a burst and then goes quiet would otherwise leave those lines buffered
+    /// indefinitely and its `.log` file empty on disk.
+    pub async fn flush_idle(&self) {
+        let handles: Vec<Arc<Mutex<WriterHandle>>> = {
+            let writers = self.writers.lock().await;
+            writers.values().map(Arc::clone).collect()
+        };
+        for handle in handles {
+            let mut h = handle.lock().await;
+            if h.pending_lines > 0 && h.last_flush.elapsed() >= FLUSH_EVERY {
+                if let Err(e) = h.writer.flush().await {
+                    tracing::warn!("Background log flush failed: {}", e);
+                    continue;
+                }
+                h.pending_lines = 0;
+                h.last_flush = Instant::now();
+            }
+        }
+    }
+
+    /// Spawn the background flusher. Runs for the life of the daemon; the
+    /// returned handle lets a caller abort it.
+    pub fn spawn_flusher(&self) -> tokio::task::JoinHandle<()> {
+        let writer = self.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(FLUSH_TICK);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                writer.flush_idle().await;
+            }
+        })
+    }
+
     /// Remove a task's writer from the map and flush whatever is buffered.
     /// Called by the exit watcher on task exit, so the durability of the
     /// final/error lines is guaranteed even though `write` flushes on a policy.
@@ -329,6 +371,50 @@ mod tests {
         assert!(contents.contains("line0"));
         assert!(contents.contains("line1"));
         assert!(contents.contains("line2"));
+    }
+
+    /// A task that logs a short burst and then goes silent must still reach
+    /// disk. `write`'s own `maybe_flush` can't do it — the burst is under
+    /// FLUSH_EVERY_LINES and no later write arrives to re-check the elapsed
+    /// deadline — so the background flusher has to.
+    #[tokio::test]
+    async fn background_flusher_persists_a_silent_task_startup_burst() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        let w = LogFileWriter::new(dir.path().to_path_buf(), 10, 5);
+        w.init_dir().await.unwrap();
+
+        // A startup burst well below FLUSH_EVERY_LINES, then silence.
+        for i in 0..7 {
+            w.write(&id, &entry(&format!("startup{}", i))).await.unwrap();
+        }
+
+        // Nothing has forced a flush yet, so the file is still empty on disk.
+        assert_eq!(read_log(dir.path(), &id).await, "");
+
+        let flusher = w.spawn_flusher();
+        // Wait past FLUSH_EVERY plus a tick or two for the flusher to act.
+        tokio::time::sleep(FLUSH_EVERY + FLUSH_TICK * 3).await;
+        flusher.abort();
+
+        let contents = read_log(dir.path(), &id).await;
+        assert!(contents.contains("startup0"), "got: {contents:?}");
+        assert!(contents.contains("startup6"), "got: {contents:?}");
+    }
+
+    /// `flush_idle` must not flush a buffer that is still inside its window —
+    /// batching is the whole point of the policy.
+    #[tokio::test]
+    async fn flush_idle_leaves_a_fresh_buffer_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = TaskId::new();
+        let w = LogFileWriter::new(dir.path().to_path_buf(), 10, 5);
+        w.init_dir().await.unwrap();
+
+        w.write(&id, &entry("fresh")).await.unwrap();
+        w.flush_idle().await; // immediately — well within FLUSH_EVERY
+
+        assert_eq!(read_log(dir.path(), &id).await, "");
     }
 
     #[tokio::test]

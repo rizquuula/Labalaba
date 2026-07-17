@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use labalaba_shared::task::TaskId;
@@ -30,13 +30,13 @@ impl GetLogs {
         limit: usize,
         offset: usize,
     ) -> anyhow::Result<Vec<LogEntry>> {
-        let (log_dir, max_rotated) = {
-            let settings = self.state.settings.read().await;
-            (
-                PathBuf::from(&settings.log_dir),
-                settings.log_max_rotated_files,
-            )
-        };
+        let max_rotated = self.state.settings.read().await.log_max_rotated_files;
+
+        // Take the directory from the writer, which holds the already-resolved
+        // path. `settings.log_dir` is relative to the data dir (see lib.rs::resolve),
+        // NOT to the daemon's CWD — reading it raw here made the history fetch look
+        // in `./logs` relative to wherever the daemon happened to be launched from.
+        let log_dir = self.state.log_writer.log_dir().await;
 
         read_recent_lines(&log_dir, task_id, limit, offset, max_rotated).await
     }
@@ -152,6 +152,62 @@ fn parse_log_line(task_id: &TaskId, line: &str) -> Option<LogEntry> {
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
+
+    /// `settings.log_dir` is relative to the data dir, but the writer is handed
+    /// an already-resolved absolute path. GetLogs must read from the writer's
+    /// directory, not re-derive one from the raw (CWD-relative) setting — doing
+    /// the latter made the history fetch always come back empty on a packaged
+    /// install, where the daemon's CWD is not the data dir.
+    #[tokio::test]
+    async fn reads_from_the_writers_resolved_dir_not_raw_relative_settings() {
+        use crate::infrastructure::log::file_writer::LogFileWriter;
+        use crate::infrastructure::persistence::yaml_repository::YamlTaskRepository;
+        use crate::infrastructure::process::spawner::OsProcessSpawner;
+        use crate::infrastructure::updater::github_updater::GithubUpdater;
+        use labalaba_shared::api::{AppSettings, LogStream};
+        use tokio::sync::mpsc;
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let resolved_logs = data_dir.path().join("logs");
+        let id = TaskId::new();
+
+        // Mirrors production: the setting stays relative, the writer gets the
+        // resolved absolute path.
+        let settings = AppSettings {
+            log_dir: "./logs".to_string(),
+            ..Default::default()
+        };
+
+        let log_writer = LogFileWriter::new(resolved_logs.clone(), 10, 5);
+        log_writer.init_dir().await.unwrap();
+
+        let (restart_tx, _restart_rx) = mpsc::channel(1);
+        let state = AppState::new(
+            Arc::new(YamlTaskRepository::new(data_dir.path().join("tasks.yaml"))),
+            Arc::new(OsProcessSpawner),
+            Arc::new(GithubUpdater::new()),
+            settings,
+            data_dir.path().join("settings.yaml").display().to_string(),
+            restart_tx,
+            log_writer,
+            None,
+            None,
+            "test-token".to_string(),
+        );
+
+        let entry = LogEntry {
+            task_id: id.to_string(),
+            timestamp: "t1".to_string(),
+            stream: LogStream::Stdout,
+            line: "hello from the resolved dir".to_string(),
+        };
+        state.log_writer.write(&id, &entry).await.unwrap();
+        state.log_writer.close(&id).await; // force it to disk
+
+        let out = GetLogs { state }.execute(&id, 100, 0).await.unwrap();
+        assert_eq!(out.len(), 1, "history fetch looked in the wrong directory");
+        assert_eq!(out[0].line, " hello from the resolved dir");
+    }
 
     async fn write_file(dir: &Path, name: &str, lines: &[&str]) {
         let path = dir.join(name);

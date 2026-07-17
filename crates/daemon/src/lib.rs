@@ -222,6 +222,10 @@ pub async fn init_app_state(
         settings.log_max_rotated_files,
     );
     log_writer.init_dir().await?;
+    // Bound how long a buffered line can sit unwritten. Without this, a task that
+    // logs at startup and then goes quiet never triggers another `write`, so the
+    // flush policy's time check never runs and its log file stays empty.
+    log_writer.spawn_flusher();
 
     let auth_token = infrastructure::auth::token::load_or_create_token(&base)?;
 

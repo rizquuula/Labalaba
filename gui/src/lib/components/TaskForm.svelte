@@ -45,6 +45,17 @@
   // file was browsed or typed — no manual Binary/Python toggle needed.
   const isPython = $derived(/\.pyw?$/i.test(executable.trim()));
 
+  // Whether the working directory is still just "wherever the executable lives"
+  // rather than something the user chose. While it is, changing the executable
+  // moves it along; once the user points it somewhere else we stop touching it,
+  // so an exe swap can't silently discard a deliberate working directory.
+  let workdirLinked = $state(
+    untrack(() => {
+      const wd = task?.config.working_directory ?? '';
+      return !wd.trim() || samePath(wd, dirname(task?.config.executable ?? ''));
+    })
+  );
+
   let activeTab = $state<'basic' | 'advanced'>('basic');
   let saving = $state(false);
   let error = $state<string | null>(null);
@@ -85,6 +96,38 @@
     return 'linux';
   }
 
+  // The directory part of a path, keeping the caller's own separators: we index
+  // into a slash-normalised copy but slice the original, and both have the same
+  // length so the index is valid for either.
+  function dirname(p: string): string {
+    const trimmed = p.trim();
+    const slash = trimmed.replace(/\\/g, '/').lastIndexOf('/');
+    return slash >= 0 ? trimmed.slice(0, slash) : '';
+  }
+
+  // Compare two paths for "means the same place": separators are interchangeable
+  // on Windows and its filesystem is case-insensitive, so C:\App and c:/app must
+  // count as equal or the working directory would look user-edited when it isn't.
+  function samePath(a: string, b: string): boolean {
+    const norm = (s: string) => s.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    const na = norm(a);
+    const nb = norm(b);
+    return detectOs() === 'windows' ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+  }
+
+  // Follow the executable while the working directory is still derived from it.
+  function syncWorkingDir(exePath: string) {
+    if (workdirLinked) {
+      workingDir = dirname(exePath);
+    }
+  }
+
+  // Re-evaluate the link whenever the user touches the working directory
+  // themselves. Clearing it re-links, so the next executable refills it.
+  function relinkWorkingDir(value: string) {
+    workdirLinked = !value.trim() || samePath(value, dirname(executable));
+  }
+
   // Filters are platform-aware: Windows executables carry extensions, but native
   // binaries on macOS/Linux usually have none, so we show all files there rather
   // than hide them behind an extension filter.
@@ -107,7 +150,7 @@
 
     const norm = selected.replace(/\\/g, '/');
     const slash = norm.lastIndexOf('/');
-    const dir = slash >= 0 ? selected.slice(0, slash) : '';
+    const dir = dirname(selected);
     const fileName = slash >= 0 ? norm.slice(slash + 1) : norm;
     const dot = fileName.lastIndexOf('.');
     const ext = dot >= 0 ? fileName.slice(dot + 1).toLowerCase() : '';
@@ -134,15 +177,18 @@
           kind === 'ps1' ? `-ExecutionPolicy Bypass -File ${fileName}`
           : kind === 'bat' ? `/c ${fileName}`
           : fileName;
+        // The working dir belongs to the *script*, not to the interpreter we
+        // just put in `executable`, and the args above name the script relative
+        // to it. Unlink so a later executable change can't move it out from
+        // under them.
+        workdirLinked = false;
         return;
       }
       // No interpreter installed — fall through to selecting the script directly.
     }
 
     executable = selected;
-    if (!workingDir) {
-      workingDir = dir;
-    }
+    syncWorkingDir(selected);
   }
 
   async function pickWorkingDir() {
@@ -153,6 +199,7 @@
     });
     if (selected && typeof selected === 'string') {
       workingDir = selected;
+      relinkWorkingDir(selected);
     }
   }
 
@@ -257,6 +304,7 @@
             <label for="task-exe">Executable / Script Path *</label>
             <div class="input-row">
               <input id="task-exe" class="input" type="text" bind:value={executable}
+                oninput={(e) => syncWorkingDir(e.currentTarget.value)}
                 placeholder="Pick a binary, .py, .sh, .ps1, .bat…" required />
               <button type="button" class="btn btn-secondary" onclick={pickExecutable}>
                 Browse
@@ -299,6 +347,7 @@
               <label for="task-wd">Working Directory</label>
               <div class="input-row">
                 <input id="task-wd" class="input" type="text" bind:value={workingDir}
+                  oninput={(e) => relinkWorkingDir(e.currentTarget.value)}
                   placeholder="C:\path\to\workdir" />
                 <button type="button" class="btn btn-secondary" onclick={pickWorkingDir}>
                   Browse

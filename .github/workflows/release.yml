@@ -153,6 +153,7 @@ jobs:
       - name: Emit updater manifest fragment
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PLATFORM: ${{ matrix.updater_platform }}
           SUFFIX: ${{ matrix.updater_suffix }}
           TARGET: ${{ matrix.target }}
@@ -184,7 +185,32 @@ jobs:
           fi
 
           sig_path="$sigs"
-          artifact="$(basename "${sig_path%.sig}")"
+
+          # The asset's name on the release is NOT always the local bundle
+          # filename: tauri-action renames the macOS .app.tar.gz to carry its
+          # arch (Labalaba.app.tar.gz -> Labalaba_aarch64.app.tar.gz), which
+          # once shipped a latest.json whose darwin URL 404'd. Resolve the real
+          # name by matching our signature's *content* against the uploaded
+          # .sig assets — signatures are unique per artifact, so this can't be
+          # fooled by a rename or by another target's bundles.
+          mkdir -p uploaded
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.sig' --dir uploaded --clobber
+          local_sig="$(cat "$sig_path")"
+          artifact=""
+          for f in uploaded/*.sig; do
+            if [ "$(cat "$f")" = "$local_sig" ]; then
+              artifact="$(basename "${f%.sig}")"
+              break
+            fi
+          done
+          if [ -z "$artifact" ]; then
+            echo "::error::no uploaded .sig matches $(basename "$sig_path") — cannot name the asset"
+            echo "Uploaded signatures on ${TAG}:"
+            ls -1 uploaded/
+            exit 1
+          fi
+
           # printf, not <<<: a here-string appends a newline that @uri would
           # faithfully encode into the URL as %0A.
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(printf '%s' "$artifact" | jq -sRr @uri)"
@@ -226,6 +252,7 @@ jobs:
       - name: Compose latest.json
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -242,10 +269,26 @@ jobs:
               missing=1
             fi
           done
-          # A latest.json missing a platform strands those users on the old
-          # version with no error surfaced anywhere. Fail the release instead.
+          # Every URL must name an asset that actually exists on this release.
+          # v1.2.6 shipped a darwin URL that 404'd because the uploaded asset
+          # had been renamed; nothing caught it until a macOS user would have
+          # tried to update. Checked against the asset list rather than by
+          # fetching the URL, because a draft's assets aren't public yet.
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          for f in fragments/*.json; do
+            enc="$(jq -r '.[].url' "$f" | sed 's#.*/##')"
+            name="$(printf '%b' "${enc//%/\\x}")"
+            if ! printf '%s\n' "$assets" | grep -Fxq "$name"; then
+              echo "::error::latest.json would point at '$name', which is not an asset on $TAG"
+              missing=1
+            fi
+          done
+
+          # A latest.json that is incomplete or points at a missing file strands
+          # those users on the old version with no error surfaced anywhere.
+          # Fail the release instead.
           if [ "$missing" -ne 0 ]; then
-            echo "::error::refusing to publish an incomplete latest.json"
+            echo "::error::refusing to publish a broken latest.json"
             exit 1
           fi
 

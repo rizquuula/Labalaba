@@ -48,7 +48,7 @@ Labalaba menulis output setiap task ke sebuah file log:
 <data dir>/logs/<task-id>.log
 ```
 
-Direktori data secara default adalah direktori kerja aplikasi dan dapat diganti dengan variabel lingkungan `LABALABA_DATA_DIR`.
+Direktori data secara default adalah direktori data per-pengguna bawaan platform (`%APPDATA%\labalaba` di Windows, `~/.local/share/labalaba` di Linux, `~/Library/Application Support/labalaba` di macOS) — bukan direktori kerja aplikasi. Direktori ini dapat diganti dengan variabel lingkungan `LABALABA_DATA_DIR`, atau dengan mengaktifkan mode portable (hanya Windows) di **Settings → Data Location**, yang membuatnya tetap berada di `<folder tempat berkas executable berada>/data`. Lihat [File Konfigurasi](./configuration-files.md) untuk urutan resolusi lengkapnya.
 
 ### Format baris di disk
 

@@ -99,6 +99,8 @@ pub fn run() {
             commands::daemon::start_daemon,
             commands::daemon::cleanup_daemon,
             commands::daemon::prepare_for_update,
+            commands::portable::get_data_location,
+            commands::portable::set_portable_mode,
             commands::service::set_autostart,
             commands::service::get_autostart,
         ])

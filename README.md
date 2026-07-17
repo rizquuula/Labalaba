@@ -133,7 +133,7 @@ Hit ▶ **Start** on the task card. Logs stream in real time.
 
 ## ⚙️ Configuration
 
-Tasks are stored in `tasks.yaml` in the working directory (repo root in dev, next to the binary in production):
+Tasks are stored in `tasks.yaml` in the data directory (repo root in dev via `LABALABA_DATA_DIR`; the platform per-user data directory in production — e.g. `%APPDATA%\labalaba` on Windows):
 
 ```yaml
 tasks:
@@ -161,7 +161,7 @@ auto_check_updates: true
 launch_at_login: false     # true = daemon mode; survives window close
 ```
 
-> **Data directory:** set `LABALABA_DATA_DIR` to override where `tasks.yaml`, `settings.yaml`, and `logs/` are stored.
+> **Data directory:** set `LABALABA_DATA_DIR` to override where `tasks.yaml`, `settings.yaml`, and `logs/` are stored. On Windows you can instead turn on **portable mode** from Settings → Data Location, which keeps all data in a `data/` folder next to the executable, so the app and its data stay in one place.
 
 ---
 

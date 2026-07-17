@@ -79,6 +79,9 @@
     color: var(--text-primary);
     line-height: 1.6;
     margin-bottom: 1.5rem;
+    /* Let a caller separate paragraphs with blank lines. Existing single-line
+       messages are unaffected. */
+    white-space: pre-line;
   }
 
   .modal-footer {

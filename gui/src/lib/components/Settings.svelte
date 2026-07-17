@@ -1,12 +1,13 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { settings, loadSettings, saveSettings } from '$lib/stores/settings';
-  import { api, type UpdateInfo } from '$lib/api/client';
+  import { api, resetConnection, type UpdateInfo } from '$lib/api/client';
   import { theme } from '$lib/stores/theme';
   import { focusTrap } from '$lib/actions/focusTrap';
   import { portal } from '$lib/actions/portal';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { revealItemInDir } from '@tauri-apps/plugin-opener';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import {
@@ -33,21 +34,130 @@
   let cleanupDone = $state<string | null>(null);
   let cleanupError = $state<string | null>(null);
 
+  // Data Location state. Mirrors DataLocation in commands/portable.rs.
+  interface DataLocation {
+    data_dir: string;
+    reveal_path: string;
+    portable_active: boolean;
+    portable_supported: boolean;
+    portable_available: boolean;
+    reason: string | null;
+    target_dir: string | null;
+    target_has_data: boolean;
+    target_modified_ms: number | null;
+  }
+
+  let dataLocation = $state<DataLocation | null>(null);
+  let switchingLocation = $state(false);
+  let showPortableConfirm = $state(false);
+  let locationNote = $state<string | null>(null);
+  let locationError = $state<string | null>(null);
+
   const modalHeadingId = 'settings-heading';
 
   onMount(() => {
-    loadSettings().then(async () => {
-      // Seed draft from freshly-loaded settings only once on mount,
-      // using untrack so we don't re-run when settings updates later.
-      untrack(() => { draft = { ...$settings }; });
-      // Sync launch_on_startup with the real OS autostart state.
-      try {
-        draft.launch_on_startup = await invoke<boolean>('get_autostart');
-      } catch {
-        // Best-effort; leave the persisted value in place on error.
-      }
-    });
+    void seedDraft();
+    void loadDataLocation();
   });
+
+  // Seed draft from freshly-loaded settings, using untrack so we don't re-run
+  // when settings updates later. Also runs after a data-location switch, since
+  // the daemon the draft came from has been replaced by then.
+  async function seedDraft() {
+    await loadSettings();
+    untrack(() => { draft = { ...$settings }; });
+    // Sync launch_on_startup with the real OS autostart state.
+    try {
+      draft.launch_on_startup = await invoke<boolean>('get_autostart');
+    } catch {
+      // Best-effort; leave the persisted value in place on error.
+    }
+  }
+
+  async function loadDataLocation() {
+    try {
+      dataLocation = await invoke<DataLocation>('get_data_location');
+    } catch (e) {
+      locationError = String(e);
+    }
+  }
+
+  async function revealData() {
+    if (!dataLocation) return;
+    try {
+      await revealItemInDir(dataLocation.reveal_path);
+    } catch (e) {
+      locationError = String(e);
+    }
+  }
+
+  // Open the confirm instead of flipping. The switch keeps showing the real
+  // state until the move actually succeeds — it is not a preference, it moves
+  // files and restarts the daemon.
+  function requestPortableToggle(e: Event) {
+    (e.currentTarget as HTMLInputElement).checked = dataLocation?.portable_active ?? false;
+    locationNote = null;
+    locationError = null;
+    showPortableConfirm = true;
+  }
+
+  function portableConfirmMessage(loc: DataLocation): string {
+    const target = loc.target_dir ?? '';
+    const parts: string[] = [
+      loc.portable_active
+        ? `Labalaba will keep its data in ${target} again.`
+        : `Labalaba will keep its data in ${target}, next to the app.`
+    ];
+
+    if (loc.target_has_data) {
+      // The copy never overwrites, so whatever is already there is what loads.
+      // Saying so is the whole point — otherwise a second toggle silently
+      // resurrects an old task list.
+      const when = loc.target_modified_ms
+        ? new Date(loc.target_modified_ms).toLocaleString()
+        : 'an unknown date';
+      parts.push(
+        `That folder already has a task file (last changed ${when}), and that is what will load. ` +
+          `Your current tasks in ${loc.data_dir} are kept, but will not be used.`
+      );
+    } else {
+      parts.push(
+        `Your tasks, settings and logs are copied there. The originals in ${loc.data_dir} are kept as a backup.`
+      );
+    }
+
+    if (!loc.portable_active) {
+      parts.push(
+        'Anyone who can write to that folder will be able to read the daemon access token, ' +
+          'so prefer this only on a machine you do not share.'
+      );
+    }
+
+    parts.push('The daemon restarts. Running tasks keep running.');
+    return parts.join('\n\n');
+  }
+
+  async function applyPortableToggle() {
+    if (!dataLocation) return;
+    const next = !dataLocation.portable_active;
+    switchingLocation = true;
+    locationNote = null;
+    locationError = null;
+    try {
+      dataLocation = await invoke<DataLocation>('set_portable_mode', { enabled: next });
+      locationNote = `Data is now in ${dataLocation.data_dir}.`;
+    } catch (e) {
+      locationError = String(e);
+      await loadDataLocation();
+    } finally {
+      showPortableConfirm = false;
+      // In `finally`, not on success: the rollback path also restarts a daemon,
+      // so the cached token is stale either way.
+      resetConnection();
+      await seedDraft();
+      switchingLocation = false;
+    }
+  }
 
   // Coerce a possibly-empty/NaN number input to an integer within [min, max],
   // falling back to `fallback` when the value is missing/unparseable. HTML
@@ -181,6 +291,62 @@
             aria-labelledby="label-log-buffer"
             bind:value={draft.log_buffer_lines} />
         </div>
+      </section>
+
+      <!-- Data Location -->
+      <section class="settings-section">
+        <h3 class="section-heading">Data Location</h3>
+
+        {#if dataLocation}
+          <div class="setting-row">
+            <div class="setting-label-group">
+              <p class="setting-name" id="label-data-dir">Data folder</p>
+              <p class="setting-path" title={dataLocation.data_dir}>{dataLocation.data_dir}</p>
+              <p class="setting-desc">tasks.yaml, settings.yaml and logs live here</p>
+            </div>
+            <button class="btn" onclick={revealData} disabled={switchingLocation}>Reveal</button>
+          </div>
+
+          {#if dataLocation.portable_supported}
+            <div class="setting-row">
+              <div class="setting-label-group">
+                <p class="setting-name" id="label-portable">Keep data next to the app</p>
+                <p class="setting-desc">
+                  {#if !dataLocation.portable_available}
+                    {dataLocation.reason}
+                  {:else if dataLocation.portable_active}
+                    Data is stored in the install folder. Turn this off to use your user profile
+                    ({dataLocation.target_dir}).
+                  {:else}
+                    Store everything in {dataLocation.target_dir} instead of your user profile, so
+                    the app and its data stay together.
+                  {/if}
+                </p>
+              </div>
+              <label class="toggle" aria-labelledby="label-portable">
+                <input
+                  type="checkbox"
+                  checked={dataLocation.portable_active}
+                  disabled={!dataLocation.portable_available || switchingLocation || $installBusy}
+                  onchange={requestPortableToggle}
+                />
+                <span class="toggle-track"></span>
+              </label>
+            </div>
+          {/if}
+
+          {#if switchingLocation}
+            <p class="setting-desc">Moving data and restarting the daemon…</p>
+          {/if}
+          {#if locationNote}
+            <p class="cleanup-done">{locationNote}</p>
+          {/if}
+          {#if locationError}
+            <p class="cleanup-error">{locationError}</p>
+          {/if}
+        {:else}
+          <p class="setting-desc">Loading…</p>
+        {/if}
       </section>
 
       <!-- Logs -->
@@ -338,6 +504,19 @@
   </div>
 </div>
 
+{#if showPortableConfirm && dataLocation}
+  <ConfirmDialog
+    variant="warning"
+    title={dataLocation.portable_active
+      ? 'Move data back to your user profile?'
+      : 'Keep data next to the app?'}
+    message={portableConfirmMessage(dataLocation)}
+    confirmText={dataLocation.portable_active ? 'Move data back' : 'Move data'}
+    onConfirm={applyPortableToggle}
+    onCancel={() => { showPortableConfirm = false; }}
+  />
+{/if}
+
 {#if showCleanupConfirm}
   <ConfirmDialog
     variant="danger"
@@ -409,6 +588,16 @@
     font-size: 0.75rem;
     color: var(--text-muted);
     margin-top: 0.125rem;
+  }
+
+  /* Paths are long and matter character-by-character: keep them monospace and
+     let them wrap rather than truncating the part the user is looking for. */
+  .setting-path {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.75rem;
+    color: var(--text-primary);
+    margin-top: 0.25rem;
+    overflow-wrap: anywhere;
   }
 
   .input-sm { width: 140px; }

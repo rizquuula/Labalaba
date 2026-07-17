@@ -187,58 +187,48 @@ fn is_connection_refused(e: &reqwest::Error) -> bool {
 
 /// Best-effort delete of all user-data artifacts produced by the daemon.
 /// Each deletion is attempted independently; failures are logged but do not
-/// abort the rest.  The data directory itself is NOT removed.
+/// abort the rest.
 pub fn purge_user_data() -> anyhow::Result<()> {
-    let base = crate::data_dir();
+    purge_user_data_in(&crate::data_dir(), crate::portable_marker_dir().as_deref())
+}
 
+/// [`purge_user_data`] against an explicit base, so it can be tested without
+/// pointing the process's real data dir at a tempdir.
+///
+/// `marker_dir` is where the portable marker lives (`None` when portable mode is
+/// unsupported). When a marker is found there it is removed **last**, after the
+/// data itself: the marker is the flag that says "the data is over here", so
+/// clearing it first would orphan whatever a crash left behind. Removing it at
+/// all is deliberate — purge is a factory reset, and a marker surviving one
+/// would silently bring a reinstall back up in portable mode pointing at an
+/// empty directory, with no obvious way for the user to see why.
+pub fn purge_user_data_in(
+    base: &std::path::Path,
+    marker_dir: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     // Load settings to resolve config_path and log_dir; fall back to defaults
     // when settings cannot be read (e.g. settings.yaml already deleted).
-    let (settings_path_resolved, log_dir_resolved) = {
-        let settings_file = base.join("settings.yaml");
-        if settings_file.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&settings_file) {
-                if let Ok(s) = serde_yaml::from_str::<labalaba_shared::api::AppSettings>(&contents) {
-                    let cfg = resolve_path(&base, &s.config_path);
-                    let logs = resolve_path(&base, &s.log_dir);
-                    (cfg, logs)
-                } else {
-                    (base.join("tasks.yaml"), base.join("logs"))
-                }
-            } else {
-                (base.join("tasks.yaml"), base.join("logs"))
-            }
-        } else {
-            (base.join("tasks.yaml"), base.join("logs"))
-        }
-    };
-
-    // daemon.token
-    let token_path = base.join("daemon.token");
-    if token_path.exists() {
-        match std::fs::remove_file(&token_path) {
-            Ok(()) => tracing::info!("Purged {}", token_path.display()),
-            Err(e) => tracing::warn!("Failed to remove {}: {e}", token_path.display()),
-        }
-    }
-
-    // tasks.yaml (config_path)
-    if settings_path_resolved.exists() {
-        match std::fs::remove_file(&settings_path_resolved) {
-            Ok(()) => tracing::info!("Purged {}", settings_path_resolved.display()),
-            Err(e) => tracing::warn!("Failed to remove {}: {e}", settings_path_resolved.display()),
-        }
-    }
-
-    // settings.yaml
     let settings_yaml = base.join("settings.yaml");
-    if settings_yaml.exists() {
-        match std::fs::remove_file(&settings_yaml) {
-            Ok(()) => tracing::info!("Purged {}", settings_yaml.display()),
-            Err(e) => tracing::warn!("Failed to remove {}: {e}", settings_yaml.display()),
+    let (config_resolved, log_dir_resolved) = std::fs::read_to_string(&settings_yaml)
+        .ok()
+        .and_then(|c| serde_yaml::from_str::<labalaba_shared::api::AppSettings>(&c).ok())
+        .map(|s| {
+            (
+                crate::resolve(base, &s.config_path),
+                crate::resolve(base, &s.log_dir),
+            )
+        })
+        .unwrap_or_else(|| (base.join("tasks.yaml"), base.join("logs")));
+
+    for file in [&base.join("daemon.token"), &config_resolved, &settings_yaml] {
+        if file.exists() {
+            match std::fs::remove_file(file) {
+                Ok(()) => tracing::info!("Purged {}", file.display()),
+                Err(e) => tracing::warn!("Failed to remove {}: {e}", file.display()),
+            }
         }
     }
 
-    // logs/ directory (recursive)
     if log_dir_resolved.exists() {
         match std::fs::remove_dir_all(&log_dir_resolved) {
             Ok(()) => tracing::info!("Purged {}", log_dir_resolved.display()),
@@ -246,16 +236,22 @@ pub fn purge_user_data() -> anyhow::Result<()> {
         }
     }
 
-    Ok(())
-}
-
-fn resolve_path(base: &std::path::Path, p: &str) -> std::path::PathBuf {
-    let path = std::path::Path::new(p);
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        base.join(p.trim_start_matches("./"))
+    // Portable marker last — see the doc comment.
+    if let Some(marker) = marker_dir.map(|d| d.join(crate::PORTABLE_MARKER)) {
+        if marker.exists() {
+            match std::fs::remove_file(&marker) {
+                Ok(()) => tracing::info!("Purged {}", marker.display()),
+                Err(e) => tracing::warn!("Failed to remove {}: {e}", marker.display()),
+            }
+            // Non-recursive on purpose: in portable mode `base` sits inside the
+            // install dir, and it should vanish only if we really did empty it.
+            // Anything the user put there keeps the directory — and keeps it out
+            // of our hands.
+            let _ = std::fs::remove_dir(base);
+        }
     }
+
+    Ok(())
 }
 
 /// Stop the running daemon, remove its autostart entry, and optionally purge
@@ -281,4 +277,84 @@ pub async fn cleanup(purge: bool) -> anyhow::Result<()> {
 
     tracing::info!("Cleanup complete.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn purge_removes_data_then_marker_and_the_portable_dir() {
+        let install = tempfile::tempdir().unwrap();
+        let base = install.path().join("data");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(base.join("settings.yaml"), "daemon_port: 27015").unwrap();
+        std::fs::write(base.join("daemon.token"), "tok").unwrap();
+        std::fs::create_dir_all(base.join("logs")).unwrap();
+        std::fs::write(base.join("logs").join("t.log"), "line").unwrap();
+        let marker = install.path().join(crate::PORTABLE_MARKER);
+        std::fs::write(&marker, "").unwrap();
+
+        purge_user_data_in(&base, Some(install.path())).unwrap();
+
+        assert!(!base.join("tasks.yaml").exists());
+        assert!(!base.join("settings.yaml").exists());
+        assert!(!base.join("daemon.token").exists());
+        assert!(!base.join("logs").exists());
+        assert!(!marker.exists(), "purge must not leave the app in portable mode");
+        assert!(!base.exists(), "an emptied portable data dir should go too");
+        // The install dir itself is not ours to delete.
+        assert!(install.path().exists());
+    }
+
+    #[test]
+    fn purge_keeps_the_portable_dir_when_the_user_left_files_in_it() {
+        let install = tempfile::tempdir().unwrap();
+        let base = install.path().join("data");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(base.join("my-notes.txt"), "keep me").unwrap();
+        std::fs::write(install.path().join(crate::PORTABLE_MARKER), "").unwrap();
+
+        purge_user_data_in(&base, Some(install.path())).unwrap();
+
+        assert!(!base.join("tasks.yaml").exists());
+        assert!(base.join("my-notes.txt").exists(), "never delete what we did not write");
+        assert!(base.exists());
+    }
+
+    #[test]
+    fn purge_without_portable_behaves_exactly_as_before() {
+        let base = tempfile::tempdir().unwrap();
+        std::fs::write(base.path().join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(base.path().join("daemon.token"), "tok").unwrap();
+
+        purge_user_data_in(base.path(), None).unwrap();
+
+        assert!(!base.path().join("tasks.yaml").exists());
+        assert!(!base.path().join("daemon.token").exists());
+        // No marker involved, so the base survives.
+        assert!(base.path().exists());
+    }
+
+    #[test]
+    fn purge_follows_an_absolute_config_path_out_of_the_data_dir() {
+        let base = tempfile::tempdir().unwrap();
+        let pinned = tempfile::tempdir().unwrap();
+        let pinned_tasks = pinned.path().join("my-tasks.yaml");
+        std::fs::write(&pinned_tasks, "tasks: []").unwrap();
+        std::fs::write(
+            base.path().join("settings.yaml"),
+            format!(
+                "config_path: {}",
+                serde_yaml::to_string(&pinned_tasks.to_string_lossy()).unwrap().trim()
+            ),
+        )
+        .unwrap();
+
+        purge_user_data_in(base.path(), None).unwrap();
+
+        assert!(!pinned_tasks.exists(), "purge means purge, wherever the user pinned it");
+    }
 }

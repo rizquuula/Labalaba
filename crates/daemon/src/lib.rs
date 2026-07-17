@@ -26,25 +26,113 @@ use application::task::start_task::StartTask;
 use application::update::check_update::CheckUpdate;
 use domain::scheduler::service::SchedulerService;
 
+/// Marker file that opts an installation into portable mode. Its presence next
+/// to the executable — not its contents — is what activates the mode.
+pub const PORTABLE_MARKER: &str = "labalaba.portable";
+
+/// Subdirectory of the executable's directory used as the data dir in portable mode.
+pub const PORTABLE_DATA_SUBDIR: &str = "data";
+
+/// Directory the portable marker is looked for in: the directory holding the
+/// running executable. `labalaba-gui` and `labalaba-daemon` are installed side
+/// by side, so both processes resolve the same directory and therefore agree.
+///
+/// `None` on platforms where writing next to the executable is unsafe, which
+/// disables portable mode entirely there:
+/// - **macOS**: the executable lives inside `Labalaba.app/Contents/MacOS/`.
+///   Writing there breaks the code signature and is wiped on update.
+/// - **Linux**: an AppImage mounts read-only at a fresh `/tmp/.mount_*` path on
+///   every launch (so the marker could neither be written nor resolve to a
+///   stable location), and a `.deb` installs to root-owned `/usr/bin`.
+///
+/// The gate lives here, in resolution, rather than only in the UI: a marker
+/// carried over by a backup or a file sync must not silently activate a mode
+/// that breaks the bundle.
+#[cfg(target_os = "windows")]
+pub fn portable_marker_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn portable_marker_dir() -> Option<PathBuf> {
+    None
+}
+
+/// Whether portable mode is currently active for this installation.
+pub fn is_portable_active() -> bool {
+    portable_marker_dir()
+        .map(|d| d.join(PORTABLE_MARKER).exists())
+        .unwrap_or(false)
+}
+
+/// The data dir portable mode would use, or `None` where it is unsupported.
+pub fn portable_data_dir() -> Option<PathBuf> {
+    portable_marker_dir().map(|d| d.join(PORTABLE_DATA_SUBDIR))
+}
+
+/// The platform per-user data dir, i.e. where data lives when portable mode is off.
+pub fn platform_data_dir() -> PathBuf {
+    dirs::data_dir()
+        .map(|d| d.join("labalaba"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The resolution rule behind [`data_dir`], as a pure function of its inputs.
+///
+/// Split out so it can be tested without touching process-global state:
+/// `data_dir` reads an env var and `current_exe`, and cargo runs tests as
+/// threads in a single process, so a test that set the env var would race every
+/// other test.
+pub(crate) fn resolve_data_dir(
+    env: Option<&str>,
+    exe_dir: Option<&Path>,
+    platform: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(val) = env {
+        if !val.is_empty() {
+            return PathBuf::from(val);
+        }
+    }
+    if let Some(dir) = exe_dir {
+        if dir.join(PORTABLE_MARKER).exists() {
+            return dir.join(PORTABLE_DATA_SUBDIR);
+        }
+    }
+    platform
+        .map(|d| d.join("labalaba"))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Base directory for all data files (`tasks.yaml`, `settings.yaml`, `logs/`).
 ///
 /// Resolution order:
 /// 1. `LABALABA_DATA_DIR` env var — when set and non-empty, use it as-is.
 ///    The Makefile sets this to the repo root for `make dev`; dev behaviour is unchanged.
-/// 2. Platform per-user data directory joined with `"labalaba"`:
+/// 2. Portable mode: `{exe_dir}/data`, when `{exe_dir}/labalaba.portable` exists.
+///    Opt-in, because the default install dir (`C:\Program Files\Labalaba`) is not
+///    writable without elevation while the daemon runs unelevated. See
+///    [`portable_marker_dir`] for the platforms this is available on.
+/// 3. Platform per-user data directory joined with `"labalaba"`:
 ///    - Linux:   `~/.local/share/labalaba`
 ///    - macOS:   `~/Library/Application Support/labalaba`
 ///    - Windows: `%APPDATA%\labalaba`
-/// 3. `.` (current working directory) — only if `dirs::data_dir()` returns `None`
+/// 4. `.` (current working directory) — only if `dirs::data_dir()` returns `None`
 ///    (unusual; should not happen on a normal installation).
+///
+/// **Deliberately not cached.** Toggling portable mode writes the marker and
+/// then expects the very next `data_dir()` call in the same process to observe
+/// the new location — a `OnceLock` here would pin the pre-toggle value and
+/// silently strand the switch half-applied.
 pub fn data_dir() -> PathBuf {
-    let env_val = std::env::var("LABALABA_DATA_DIR").unwrap_or_default();
-    if !env_val.is_empty() {
-        return PathBuf::from(env_val);
-    }
-    dirs::data_dir()
-        .map(|d| d.join("labalaba"))
-        .unwrap_or_else(|| PathBuf::from("."))
+    let env_val = std::env::var("LABALABA_DATA_DIR").ok();
+    resolve_data_dir(
+        env_val.as_deref(),
+        portable_marker_dir().as_deref(),
+        dirs::data_dir(),
+    )
 }
 
 /// Copy a file from `src` to `dst`, creating parent directories as needed.
@@ -151,13 +239,117 @@ pub fn migrate_legacy_data_dir(legacy_dir: &Path, target: &Path) {
 }
 
 /// Resolve a path that may be relative (e.g. "./tasks.yaml") against a base dir.
-fn resolve(base: &Path, p: &str) -> PathBuf {
+///
+/// `config_path` and `log_dir` in settings are relative to the **data dir**, not
+/// to the CWD — the daemon is spawned with no `current_dir()`, so it inherits
+/// the GUI's. Always come through here (or read the already-resolved path off
+/// the component that owns it) rather than using the raw setting.
+pub fn resolve(base: &Path, p: &str) -> PathBuf {
     let path = Path::new(p);
     if path.is_absolute() {
         path.to_path_buf()
     } else {
         base.join(p.trim_start_matches("./"))
     }
+}
+
+/// What [`copy_data_dir_for_switch`] actually did, so the UI can tell the user
+/// rather than leaving them to guess which data set the daemon came up on.
+#[derive(Debug, Default, Clone)]
+pub struct SwitchReport {
+    pub copied_tasks: bool,
+    pub copied_settings: bool,
+    /// The destination already held a `tasks.yaml`, so nothing was overwritten
+    /// and *that* file — not the source's — is what the daemon will load.
+    pub target_had_data: bool,
+    /// `config_path` is absolute, so the task file lives outside the data dir
+    /// and was deliberately left where it is.
+    pub skipped_absolute_config: Option<PathBuf>,
+    /// `log_dir` is absolute; same reasoning.
+    pub skipped_absolute_logs: Option<PathBuf>,
+}
+
+/// Copy a data set between two bases when switching portable mode on or off.
+///
+/// Semantics match [`migrate_legacy_data_dir`]: files are **copied**, never
+/// moved, and an existing file at the destination is never overwritten. The
+/// source is left fully intact as a fallback.
+///
+/// It is a separate function rather than a call to `migrate_legacy_data_dir`
+/// because that one gates the *entire* migration on `src/tasks.yaml` existing.
+/// With an absolute `config_path` the task file is not at `src/tasks.yaml`, so
+/// that gate would skip everything — `settings.yaml` included — and the daemon
+/// would restart on `AppSettings::default()`, silently reverting the user's
+/// port and pointing at an empty task file.
+///
+/// `daemon.token` is never copied: `load_or_create_token` reuses an existing
+/// token file, so a stale one at the destination would win over the live one.
+/// Letting each base mint its own token is both simpler and safer.
+pub fn copy_data_dir_for_switch(src: &Path, dst: &Path, settings: &AppSettings) -> SwitchReport {
+    let mut report = SwitchReport::default();
+    if src == dst {
+        return report;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(dst) {
+        tracing::warn!("switch: could not create target dir {}: {}", dst.display(), e);
+        return report;
+    }
+
+    report.target_had_data = resolve(dst, &settings.config_path).exists();
+
+    // settings.yaml — unconditional, so a custom daemon_port survives the switch
+    // even when config_path points somewhere else entirely.
+    let src_settings = src.join("settings.yaml");
+    if src_settings.exists() {
+        report.copied_settings = copy_file_best_effort(&src_settings, &dst.join("settings.yaml"));
+    }
+
+    // tasks.yaml — only when config_path is relative to the data dir. An
+    // absolute path is a location the user pinned on purpose; relocating it
+    // would move data out from under them.
+    if Path::new(&settings.config_path).is_absolute() {
+        report.skipped_absolute_config = Some(PathBuf::from(&settings.config_path));
+    } else {
+        let src_tasks = resolve(src, &settings.config_path);
+        if src_tasks.exists() {
+            report.copied_tasks =
+                copy_file_best_effort(&src_tasks, &resolve(dst, &settings.config_path));
+        }
+    }
+
+    // logs/ — same rule.
+    if Path::new(&settings.log_dir).is_absolute() {
+        report.skipped_absolute_logs = Some(PathBuf::from(&settings.log_dir));
+    } else {
+        let src_logs = resolve(src, &settings.log_dir);
+        if src_logs.is_dir() {
+            copy_dir_recursive_best_effort(&src_logs, &resolve(dst, &settings.log_dir));
+        }
+    }
+
+    // autostart.pending is *moved*, not copied. It is a one-shot instruction to
+    // the next launch, and the next launch reads the new base. Leaving a copy
+    // behind would let it fire again at an arbitrary later time if the user ever
+    // switches back.
+    let src_pending = src.join("autostart.pending");
+    if src_pending.exists() {
+        copy_file_best_effort(&src_pending, &dst.join("autostart.pending"));
+        if let Err(e) = std::fs::remove_file(&src_pending) {
+            tracing::warn!("switch: could not remove {}: {}", src_pending.display(), e);
+        }
+    }
+
+    tracing::info!(
+        "switch: copied data {} → {} (tasks: {}, settings: {}, target had data: {})",
+        src.display(),
+        dst.display(),
+        report.copied_tasks,
+        report.copied_settings,
+        report.target_had_data
+    );
+
+    report
 }
 
 /// Check if a process with the given PID is still alive AND (best effort)
@@ -715,5 +907,248 @@ mod tests {
         // File untouched.
         let content = std::fs::read_to_string(dir.path().join("tasks.yaml")).unwrap();
         assert_eq!(content, "tasks: []");
+    }
+
+    // --- data dir resolution ---
+    //
+    // These exercise `resolve_data_dir`, not `data_dir`. `data_dir` reads a
+    // process-global env var and `current_exe`; cargo runs tests as threads in
+    // one process, so a test that set the env var would race every other test.
+
+    fn touch(path: &std::path::Path) {
+        std::fs::write(path, "").unwrap();
+    }
+
+    #[test]
+    fn env_var_wins_over_marker_and_platform() {
+        let exe = tempfile::tempdir().unwrap();
+        let platform = tempfile::tempdir().unwrap();
+        touch(&exe.path().join(PORTABLE_MARKER));
+
+        let got = resolve_data_dir(
+            Some("/explicit/override"),
+            Some(exe.path()),
+            Some(platform.path().to_path_buf()),
+        );
+
+        assert_eq!(got, PathBuf::from("/explicit/override"));
+    }
+
+    #[test]
+    fn empty_env_var_falls_through() {
+        // Mirrors the real caller: an env var set to "" must not win, or a
+        // stray `LABALABA_DATA_DIR=` would silently root the data dir at "".
+        let platform = tempfile::tempdir().unwrap();
+
+        let got = resolve_data_dir(Some(""), None, Some(platform.path().to_path_buf()));
+
+        assert_eq!(got, platform.path().join("labalaba"));
+    }
+
+    #[test]
+    fn marker_present_resolves_to_exe_data_subdir() {
+        let exe = tempfile::tempdir().unwrap();
+        let platform = tempfile::tempdir().unwrap();
+        touch(&exe.path().join(PORTABLE_MARKER));
+
+        let got = resolve_data_dir(None, Some(exe.path()), Some(platform.path().to_path_buf()));
+
+        assert_eq!(got, exe.path().join("data"));
+    }
+
+    #[test]
+    fn marker_absent_resolves_to_platform_dir() {
+        let exe = tempfile::tempdir().unwrap();
+        let platform = tempfile::tempdir().unwrap();
+
+        let got = resolve_data_dir(None, Some(exe.path()), Some(platform.path().to_path_buf()));
+
+        assert_eq!(got, platform.path().join("labalaba"));
+    }
+
+    #[test]
+    fn marker_is_ignored_when_platform_does_not_support_portable() {
+        // `portable_marker_dir()` returns None on macOS/Linux. A marker file
+        // physically present there — carried over by a backup or a file sync —
+        // must not activate a mode that breaks the app bundle.
+        let exe = tempfile::tempdir().unwrap();
+        let platform = tempfile::tempdir().unwrap();
+        touch(&exe.path().join(PORTABLE_MARKER));
+
+        let got = resolve_data_dir(None, None, Some(platform.path().to_path_buf()));
+
+        assert_eq!(got, platform.path().join("labalaba"));
+    }
+
+    #[test]
+    fn no_platform_dir_falls_back_to_cwd() {
+        let got = resolve_data_dir(None, None, None);
+        assert_eq!(got, PathBuf::from("."));
+    }
+
+    #[test]
+    fn marker_resolves_even_before_the_data_subdir_exists() {
+        // Resolution must not depend on the directory already existing —
+        // `init_app_state` is what creates it, and it runs after this.
+        let exe = tempfile::tempdir().unwrap();
+        touch(&exe.path().join(PORTABLE_MARKER));
+
+        let got = resolve_data_dir(None, Some(exe.path()), None);
+
+        assert_eq!(got, exe.path().join("data"));
+        assert!(!got.exists());
+    }
+
+    // --- portable switch copy ---
+
+    fn settings_with(config_path: &str, log_dir: &str) -> AppSettings {
+        AppSettings {
+            config_path: config_path.to_string(),
+            log_dir: log_dir.to_string(),
+            ..AppSettings::default()
+        }
+    }
+
+    #[test]
+    fn switch_copies_tasks_settings_and_logs_when_paths_are_relative() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("tasks.yaml"), "tasks: [a]").unwrap();
+        std::fs::write(src.path().join("settings.yaml"), "daemon_port: 30000").unwrap();
+        std::fs::create_dir_all(src.path().join("logs")).unwrap();
+        std::fs::write(src.path().join("logs").join("t.log"), "line").unwrap();
+
+        let report =
+            copy_data_dir_for_switch(src.path(), dst.path(), &settings_with("./tasks.yaml", "./logs"));
+
+        assert!(report.copied_tasks);
+        assert!(report.copied_settings);
+        assert!(!report.target_had_data);
+        assert_eq!(
+            std::fs::read_to_string(dst.path().join("tasks.yaml")).unwrap(),
+            "tasks: [a]"
+        );
+        assert!(dst.path().join("settings.yaml").exists());
+        assert!(dst.path().join("logs").join("t.log").exists());
+        // Source is left intact as the fallback.
+        assert!(src.path().join("tasks.yaml").exists());
+    }
+
+    #[test]
+    fn switch_copies_settings_even_when_config_path_is_absolute() {
+        // The regression this function exists for: `migrate_legacy_data_dir`
+        // gates everything on `src/tasks.yaml`, so an absolute config_path made
+        // it skip settings.yaml too and the daemon restarted on defaults —
+        // silently reverting the user's daemon_port.
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let pinned = tempfile::tempdir().unwrap();
+        let pinned_tasks = pinned.path().join("my-tasks.yaml");
+        std::fs::write(&pinned_tasks, "tasks: [pinned]").unwrap();
+        std::fs::write(src.path().join("settings.yaml"), "daemon_port: 30000").unwrap();
+
+        let settings = settings_with(pinned_tasks.to_str().unwrap(), "./logs");
+        let report = copy_data_dir_for_switch(src.path(), dst.path(), &settings);
+
+        assert!(report.copied_settings, "settings.yaml must move regardless");
+        assert!(!report.copied_tasks);
+        assert_eq!(report.skipped_absolute_config, Some(pinned_tasks.clone()));
+        // The pinned file stays exactly where the user put it.
+        assert!(pinned_tasks.exists());
+        assert!(!dst.path().join("my-tasks.yaml").exists());
+    }
+
+    #[test]
+    fn switch_copies_settings_when_source_has_no_tasks_yaml_at_all() {
+        // Exactly the case where migrate_legacy_data_dir copies nothing.
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("settings.yaml"), "daemon_port: 30000").unwrap();
+
+        let settings = settings_with("/pinned/elsewhere/tasks.yaml", "./logs");
+        let report = copy_data_dir_for_switch(src.path(), dst.path(), &settings);
+
+        assert!(report.copied_settings);
+        assert!(dst.path().join("settings.yaml").exists());
+    }
+
+    #[test]
+    fn switch_never_overwrites_and_reports_target_had_data() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("tasks.yaml"), "tasks: [src]").unwrap();
+        std::fs::write(dst.path().join("tasks.yaml"), "tasks: [dst]").unwrap();
+
+        let report =
+            copy_data_dir_for_switch(src.path(), dst.path(), &settings_with("./tasks.yaml", "./logs"));
+
+        assert!(report.target_had_data, "the UI must be able to warn about this");
+        assert!(!report.copied_tasks);
+        assert_eq!(
+            std::fs::read_to_string(dst.path().join("tasks.yaml")).unwrap(),
+            "tasks: [dst]",
+            "the destination's data must win, untouched"
+        );
+    }
+
+    #[test]
+    fn switch_never_copies_the_daemon_token() {
+        // load_or_create_token reuses an existing file, so a copied token would
+        // outrank the live one at the destination.
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(src.path().join("daemon.token"), "deadbeef").unwrap();
+
+        copy_data_dir_for_switch(src.path(), dst.path(), &settings_with("./tasks.yaml", "./logs"));
+
+        assert!(!dst.path().join("daemon.token").exists());
+    }
+
+    #[test]
+    fn switch_skips_absolute_log_dir() {
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        let pinned_logs = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("tasks.yaml"), "tasks: []").unwrap();
+
+        let settings = settings_with("./tasks.yaml", pinned_logs.path().to_str().unwrap());
+        let report = copy_data_dir_for_switch(src.path(), dst.path(), &settings);
+
+        assert_eq!(
+            report.skipped_absolute_logs,
+            Some(pinned_logs.path().to_path_buf())
+        );
+        assert!(!dst.path().join("logs").exists());
+    }
+
+    #[test]
+    fn switch_moves_the_autostart_pending_marker() {
+        // It is a one-shot instruction to the next launch, and the next launch
+        // reads the new base. A leftover copy would fire again later.
+        let src = tempfile::tempdir().unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("tasks.yaml"), "tasks: []").unwrap();
+        std::fs::write(src.path().join("autostart.pending"), "1").unwrap();
+
+        copy_data_dir_for_switch(src.path(), dst.path(), &settings_with("./tasks.yaml", "./logs"));
+
+        assert!(dst.path().join("autostart.pending").exists());
+        assert!(!src.path().join("autostart.pending").exists());
+    }
+
+    #[test]
+    fn switch_is_noop_when_src_and_dst_are_same_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tasks.yaml"), "tasks: []").unwrap();
+
+        let report =
+            copy_data_dir_for_switch(dir.path(), dir.path(), &settings_with("./tasks.yaml", "./logs"));
+
+        assert!(!report.copied_tasks);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("tasks.yaml")).unwrap(),
+            "tasks: []"
+        );
     }
 }

@@ -7,7 +7,7 @@
   import Settings from '$lib/components/Settings.svelte';
   import DaemonStatusBar from '$lib/components/DaemonStatusBar.svelte';
   import { loadTasks, startPolling, tasks } from '$lib/stores/tasks';
-  import { api } from '$lib/api/client';
+  import { api, connectionEpoch } from '$lib/api/client';
   import type { TaskDto } from '$lib/api/client';
   import type { UpdateInfo } from '$lib/api/client';
   import { focusTrap } from '$lib/actions/focusTrap';
@@ -100,17 +100,23 @@
 <div class="layout">
   <TopBar onSettingsClick={() => (showSettings = true)} />
 
-  <main class="main-content">
-    <TaskList onViewLogs={openLogs} onEdit={openEditForm} onAddNew={openAddForm} />
+  <!-- Remount when the daemon connection is replaced (a data-location switch
+       restarts it elsewhere). An open log stream bakes the old token and port
+       into its URL and reconnects forever, so it would never notice on its own;
+       remounting is the cheapest correct teardown. -->
+  {#key $connectionEpoch}
+    <main class="main-content">
+      <TaskList onViewLogs={openLogs} onEdit={openEditForm} onAddNew={openAddForm} />
 
-    {#if activeLogTask}
-      <LogViewer
-        taskId={activeLogTask.config.id}
-        taskName={activeLogTask.config.description}
-        onClose={closeLogs}
-      />
-    {/if}
-  </main>
+      {#if activeLogTask}
+        <LogViewer
+          taskId={activeLogTask.config.id}
+          taskName={activeLogTask.config.description}
+          onClose={closeLogs}
+        />
+      {/if}
+    </main>
+  {/key}
 
   <DaemonStatusBar />
 </div>

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { writable } from 'svelte/store';
 
 export interface TaskConfig {
   id: string;
@@ -89,6 +90,25 @@ interface ApiResponse<T> {
 }
 
 let connectionPromise: Promise<DaemonConnection> | null = null;
+
+/**
+ * Bumped whenever the cached connection is dropped. Views holding a connection
+ * derived from it — chiefly open WebSockets, which bake the token and port into
+ * their URL and reconnect forever — should key off this and remount.
+ */
+export const connectionEpoch = writable(0);
+
+/**
+ * Drop the cached connection so the next call re-invokes the backend.
+ *
+ * Needed because the token and port are cached for the whole session: after the
+ * daemon is restarted somewhere else (see `set_portable_mode`), the cached
+ * bearer token is for a daemon that no longer exists and every request 401s.
+ */
+export function resetConnection(): void {
+  connectionPromise = null;
+  connectionEpoch.update((n) => n + 1);
+}
 
 export function getConnection(): Promise<DaemonConnection> {
   if (!connectionPromise) {

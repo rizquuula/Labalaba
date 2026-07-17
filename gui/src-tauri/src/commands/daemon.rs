@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -19,6 +20,10 @@ pub struct DaemonHandle {
     /// `get_daemon_connection` report the real reason instead of timing out on a
     /// connect that already gave up.
     pub error: Mutex<Option<String>>,
+    /// Set while `set_portable_mode` is stopping the daemon, moving data, and
+    /// starting it again. Two of those runs interleaving would race over the
+    /// marker and the port, so the second one is refused rather than queued.
+    pub switching: AtomicBool,
 }
 
 impl Default for DaemonHandle {
@@ -27,6 +32,7 @@ impl Default for DaemonHandle {
             connection: Mutex::new(None),
             child: Mutex::new(None),
             error: Mutex::new(None),
+            switching: AtomicBool::new(false),
         }
     }
 }
@@ -223,7 +229,7 @@ pub async fn get_daemon_connection(
 /// bound but refusing connections — use
 /// [`probe_port`](labalaba_daemon::infrastructure::net::probe_port) where that
 /// distinction matters, i.e. before deciding to spawn a daemon.
-fn is_listening(port: u16) -> bool {
+pub(crate) fn is_listening(port: u16) -> bool {
     labalaba_daemon::infrastructure::net::is_connectable(port)
 }
 
@@ -232,7 +238,7 @@ fn is_listening(port: u16) -> bool {
 /// (authenticated via the persisted token), then force-kills any lingering
 /// daemon process by image name. Never errors — if a *foreign* process keeps
 /// the port, the subsequent spawn fails loudly instead of hanging the UI.
-fn reclaim_port(port: u16) {
+pub(crate) fn reclaim_port(port: u16) {
     let _ = tauri::async_runtime::block_on(labalaba_daemon::stop_running_daemon());
 
     if is_listening(port) {

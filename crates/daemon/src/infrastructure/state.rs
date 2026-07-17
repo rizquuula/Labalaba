@@ -94,9 +94,9 @@ impl AppState {
     /// so a settings update takes effect without a restart. `max_file_size_mb`
     /// and `max_rotated_files` apply to subsequent writes/rotations; `log_dir`
     /// applies only to writers opened after this call (already-open files keep
-    /// their path). Resolves `log_dir` the same way startup does (relative to
-    /// `LABALABA_DATA_DIR`), so the writer keeps logging to the same place the
-    /// daemon was launched against.
+    /// their path). Resolves `log_dir` the same way startup does (against
+    /// `data_dir()`), so the writer keeps logging to the same place the daemon
+    /// was launched against.
     pub async fn apply_log_settings(&self) {
         let (log_dir, max_file_size_mb, max_rotated_files) = {
             let s = self.settings.read().await;
@@ -107,13 +107,7 @@ impl AppState {
             )
         };
 
-        let base = crate::data_dir();
-        let p = std::path::Path::new(&log_dir);
-        let resolved = if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            base.join(log_dir.trim_start_matches("./"))
-        };
+        let resolved = crate::resolve(&crate::data_dir(), &log_dir);
 
         self.log_writer
             .update_config(resolved, max_file_size_mb, max_rotated_files)

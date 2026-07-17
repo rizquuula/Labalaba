@@ -6,13 +6,23 @@ Labalaba menyimpan semua yang dibutuhkan — task, pengaturan, dan berkas log �
 
 ## Direktori data
 
-Secara default, direktori data adalah direktori kerja aplikasi (folder yang sama dengan berkas binary Labalaba pada instalasi normal). Semua berkas berada di sana:
+Labalaba menentukan direktori data dengan urutan berikut, berhenti pada kecocokan pertama:
+
+1. **Variabel lingkungan `LABALABA_DATA_DIR`** — jika diatur dan tidak kosong, digunakan apa adanya.
+2. **Mode portable** — jika diaktifkan, `<folder tempat berkas executable berada>/data`. Lihat [Mode portable](#mode-portable) di bawah. Hanya untuk Windows.
+3. **Direktori data per-pengguna bawaan platform** + `labalaba` — inilah nilai default pada instalasi normal:
+   - Windows: `%APPDATA%\labalaba`
+   - Linux: `~/.local/share/labalaba`
+   - macOS: `~/Library/Application Support/labalaba`
+4. `.` (direktori kerja saat ini) — hanya jika direktori data platform tidak dapat ditentukan; tidak diharapkan terjadi pada instalasi normal.
+
+Direktori data **bukan** direktori kerja aplikasi dan **bukan** direktori instalasi. Semua berkas berada di sana:
 
 | Item | Path default | Isi |
 |---|---|---|
-| `tasks.yaml` | `./tasks.yaml` | Semua definisi task Anda |
-| `settings.yaml` | `./settings.yaml` | Semua pengaturan aplikasi |
-| `logs/` | `./logs/` | Berkas log per task |
+| `tasks.yaml` | `<direktori data>/tasks.yaml` | Semua definisi task Anda |
+| `settings.yaml` | `<direktori data>/settings.yaml` | Semua pengaturan aplikasi |
+| `logs/` | `<direktori data>/logs/` | Berkas log per task |
 
 ### Mengubah direktori data
 
@@ -22,9 +32,24 @@ Atur variabel lingkungan `LABALABA_DATA_DIR` sebelum menjalankan Labalaba untuk 
 LABALABA_DATA_DIR=/home/you/labalaba-data
 ```
 
-Semua path relatif di dalam `settings.yaml` (seperti `./tasks.yaml` atau `./logs`) diselesaikan terhadap direktori ini.
+Semua path relatif di dalam `settings.yaml` (seperti `./tasks.yaml` atau `./logs`) diselesaikan terhadap direktori ini, bukan terhadap direktori kerja saat ini.
 
 > **Tip:** Ini berguna jika Anda ingin menyimpan data di drive bersama atau folder pengguna tertentu.
+
+### Mode portable
+
+Mode portable menyimpan seluruh data Labalaba di sebelah aplikasi, bukan di profil per-pengguna Anda, sehingga aplikasi dan datanya berada dalam satu folder — memudahkan pencadangan dan menjaga semuanya di satu drive. Mode ini bersifat **opt-in** dan **hanya untuk Windows**: folder instalasi default (`C:\Program Files\Labalaba`) tidak dapat ditulis tanpa elevasi selagi daemon berjalan tanpa elevasi, sehingga tidak ada yang berpindah ke sana secara otomatis. Mode ini tidak tersedia di macOS (menulis di dalam `Labalaba.app` merusak tanda tangan kode/code signature dan akan terhapus saat pembaruan berikutnya) maupun Linux (AppImage terpasang read-only di path sementara yang baru setiap kali dijalankan, dan instalasi `.deb` menempati `/usr/bin` milik root).
+
+Aktifkan lewat **Settings → Data Location**, yang juga menampilkan direktori data yang sedang aktif dan memiliki tombol **Reveal** untuk membuka folder tersebut di file manager. Saat toggle diubah:
+
+1. Daemon dihentikan.
+2. `tasks.yaml`, `settings.yaml`, dan `logs/` disalin ke `<folder tempat berkas executable berada>/data`. Ini adalah **penyalinan**, bukan pemindahan, dan tidak pernah menimpa berkas yang sudah ada di tujuan — jika `tasks.yaml` sudah ada di sana, berkas itulah yang akan dimuat, bukan hasil salinan dari sumbernya. Dialog konfirmasi menjelaskan hal ini sebelum Anda melanjutkan.
+3. Berkas penanda `labalaba.portable` ditulis (atau, saat beralih kembali, dihapus) di sebelah berkas executable — keberadaannya yang mengaktifkan mode ini.
+4. Daemon dijalankan ulang dengan direktori yang baru.
+
+Task yang sedang berjalan tetap bertahan saat beralih, dan data asli dibiarkan apa adanya sebagai cadangan — tidak ada yang dihapus saat Anda mengaktifkan atau menonaktifkan mode portable.
+
+> **Catatan:** Nilai `config_path` / `log_dir` yang absolut di `settings.yaml` tidak pernah disentuh oleh peralihan mode portable — lihat bagian [settings.yaml](#settingsyaml) di bawah.
 
 ---
 
@@ -101,14 +126,16 @@ log_max_rotated_files: 5
 | `theme` | `"dark"` | `"dark"` atau `"light"` |
 | `daemon_port` | `27015` | Port mesin internal (1024–65535) |
 | `log_buffer_lines` | `5000` | Maks baris log di memori per task (100–50000) |
-| `config_path` | `"./tasks.yaml"` | Path ke berkas definisi task |
+| `config_path` | `"./tasks.yaml"` | Path ke berkas definisi task. Path relatif diselesaikan terhadap direktori data, bukan direktori kerja; path absolut digunakan apa adanya |
 | `notifications_enabled` | `true` | Notifikasi desktop saat crash/berhenti, aktif atau tidak |
 | `auto_check_updates` | `true` | Periksa pembaruan sekali sehari |
 | `update_check_interval_hours` | `24` | Jam antara pemeriksaan pembaruan otomatis |
 | `launch_on_startup` | `false` | Jalankan Labalaba saat Anda masuk |
-| `log_dir` | `"./logs"` | Folder untuk berkas log per task |
+| `log_dir` | `"./logs"` | Folder untuk berkas log per task. Path relatif diselesaikan terhadap direktori data, bukan direktori kerja; path absolut digunakan apa adanya |
 | `log_max_file_size_mb` | `10` | Rotasi berkas log setelah mencapai ukuran ini (MB) |
 | `log_max_rotated_files` | `5` | Berkas log lama yang disimpan per task (0 = tidak ada) |
+
+> **Catatan:** `config_path` dan `log_dir` tidak ikut berpindah saat Anda mengaktifkan atau menonaktifkan mode portable — jika salah satunya Anda arahkan ke path absolut, itu adalah penempatan yang disengaja dan tidak akan dipindahkan oleh mode portable. Hanya path relatif (yang menurut definisinya berada di dalam direktori data) yang ikut berpindah.
 
 ---
 

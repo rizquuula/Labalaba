@@ -48,7 +48,7 @@ Labalaba writes every task's output to a log file:
 <data dir>/logs/<task-id>.log
 ```
 
-The data directory defaults to the app's working directory and can be overridden with the `LABALABA_DATA_DIR` environment variable.
+The data directory defaults to your platform's per-user data directory (`%APPDATA%\labalaba` on Windows, `~/.local/share/labalaba` on Linux, `~/Library/Application Support/labalaba` on macOS) — not the app's working directory. It can be overridden with the `LABALABA_DATA_DIR` environment variable, or by turning on portable mode (Windows only) in **Settings → Data Location**, which keeps it at `<folder holding the executable>/data` instead. See [Configuration Files](./configuration-files.md) for the full resolution order.
 
 ### On-disk line format
 

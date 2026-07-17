@@ -22,7 +22,14 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
+            // An installer may have torn down the autostart entry while replacing
+            // our files (see restore_autostart_after_update). Put it back before
+            // anything else touches the daemon.
+            commands::daemon::restore_autostart_after_update();
+
             // Daemon lifecycle
             match start_or_connect_daemon() {
                 Ok((conn, child)) => {
@@ -99,6 +106,7 @@ pub fn run() {
             commands::daemon::daemon_status,
             commands::daemon::start_daemon,
             commands::daemon::cleanup_daemon,
+            commands::daemon::prepare_for_update,
             commands::service::set_autostart,
             commands::service::get_autostart,
         ])

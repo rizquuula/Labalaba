@@ -61,6 +61,87 @@ pub fn cleanup_daemon(state: tauri::State<'_, DaemonHandle>, purge: bool) -> Res
     res
 }
 
+/// Records that autostart was enabled when an update install began. Written by
+/// `prepare_for_update`, consumed by `restore_autostart_after_update` on the
+/// next launch.
+fn autostart_marker_path() -> PathBuf {
+    labalaba_daemon::data_dir().join("autostart.pending")
+}
+
+/// Stop the daemon so an update installer can overwrite its binary.
+///
+/// The daemon is a separate process installed next to the app (see
+/// `resolve_daemon_bin`) and it deliberately outlives the window. At install
+/// time it therefore still holds an open handle on the very file the installer
+/// wants to replace — on Windows that lock makes the install fail outright.
+///
+/// Call this only *after* the update has been downloaded and its signature
+/// verified. Stopping the daemon kills the user's running tasks, so doing it
+/// for an update that then fails to download would be a pointless outage.
+#[tauri::command]
+pub fn prepare_for_update(state: tauri::State<'_, DaemonHandle>) -> Result<(), String> {
+    // The Windows installer runs `labalaba-daemon.exe cleanup` from the NSIS
+    // pre-uninstall hook, and cleanup removes the autostart entry as well as
+    // stopping the daemon. Record the current state so the next launch can put
+    // it back rather than silently losing it on every update.
+    let marker = autostart_marker_path();
+    if crate::commands::service::is_autostart_installed() {
+        if let Err(e) = std::fs::write(&marker, "1") {
+            eprintln!(
+                "could not record autostart state at {}: {e}",
+                marker.display()
+            );
+        }
+    } else {
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    let (settings, _) = tauri::async_runtime::block_on(labalaba_daemon::load_settings());
+    let port = settings.daemon_port;
+
+    reclaim_port(port);
+
+    // We told the daemon to die; drop our child handle so the Exit handler
+    // doesn't later try to kill a pid that's already gone.
+    if let Some(mut old) = state.child.lock().unwrap().take() {
+        let _ = old.try_wait();
+    }
+
+    // Report rather than let the installer fail with an opaque "file in use".
+    if is_listening(port) {
+        return Err(format!(
+            "the daemon is still listening on port {port}; the installer would fail to \
+             replace labalaba-daemon — stop it manually and try again"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Re-install the autostart entry if an update installer removed it. No-op
+/// unless `prepare_for_update` left a marker behind, so a user who deliberately
+/// turned autostart off never has it forced back on.
+pub(crate) fn restore_autostart_after_update() {
+    let marker = autostart_marker_path();
+    if !marker.exists() {
+        return;
+    }
+    let _ = std::fs::remove_file(&marker);
+
+    if labalaba_daemon::infrastructure::autostart::is_installed() {
+        return;
+    }
+
+    let Some(bin) = resolve_daemon_bin() else {
+        eprintln!("cannot restore autostart after update: daemon binary not found");
+        return;
+    };
+    match labalaba_daemon::infrastructure::autostart::install(&bin) {
+        Ok(()) => eprintln!("restored the autostart entry removed during the update"),
+        Err(e) => eprintln!("could not restore autostart entry after update: {e}"),
+    }
+}
+
 #[tauri::command]
 pub fn get_daemon_connection(
     state: tauri::State<'_, DaemonHandle>,

@@ -15,26 +15,42 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `updater_platform` is the key tauri-plugin-updater looks itself up by
+        # in latest.json ("{os}-{arch}") — a contract, not a label we choose.
+        # `updater_suffix` identifies which of the bundles this target produces
+        # is the one the updater installs: NSIS on Windows (the .msi is still
+        # published for manual download, but is not the update path), AppImage
+        # on Linux (.deb/.rpm cannot self-update at all), .app.tar.gz on macOS.
         include:
           - name: Windows x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            updater_platform: windows-x86_64
+            updater_suffix: -setup.exe
 
           - name: Windows x86
             os: windows-latest
             target: i686-pc-windows-msvc
+            updater_platform: windows-i686
+            updater_suffix: -setup.exe
 
           - name: Linux amd64
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            updater_platform: linux-x86_64
+            updater_suffix: .AppImage
 
           - name: Linux arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            updater_platform: linux-aarch64
+            updater_suffix: .AppImage
 
           - name: macOS Silicon
             os: macos-latest
             target: aarch64-apple-darwin
+            updater_platform: darwin-aarch64
+            updater_suffix: .app.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -109,11 +125,146 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts. Without these the bundler fails rather
+          # than shipping a release the installed updater would reject.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: gui
           tagName: ${{ github.ref_name }}
           releaseName: 'Labalaba ${{ github.ref_name }}'
           releaseBody: 'See the assets below to download and install this version.'
-          releaseDraft: false
+          # Stay a draft until every target has uploaded. The updater endpoint
+          # is `releases/latest/download/latest.json`, so a release that goes
+          # public early would advertise itself to clients whose platform has
+          # not finished uploading yet.
+          releaseDraft: true
           prerelease: false
+          # latest.json is composed once, in the publish job. Left to itself
+          # each of the 5 concurrent jobs would read-modify-write the same
+          # asset and races would silently drop platform entries.
+          uploadUpdaterJson: false
           args: --target ${{ matrix.target }}
+
+      # Each job knows exactly which artifact it just built, so it names its own
+      # latest.json entry rather than the publish job having to guess bundle
+      # filenames (which encode productName, version and an arch spelling that
+      # differs per bundler) back from the release asset list.
+      - name: Emit updater manifest fragment
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.updater_platform }}
+          SUFFIX: ${{ matrix.updater_suffix }}
+          TARGET: ${{ matrix.target }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Kept POSIX-ish on purpose: the macOS runner still ships bash 3.2,
+          # so no mapfile / no associative arrays here.
+          # Searched from the repo root rather than a hardcoded bundle path:
+          # cargo resolves this workspace's target dir itself, and a wrong guess
+          # here would look identical to "the bundler produced nothing". The
+          # triple filter keeps the match unambiguous regardless of where the
+          # target dir lives — `--target $TARGET` always puts it in the path.
+          find_sigs() {
+            find . \( -name node_modules -o -name .git \) -prune -o \
+                 -type f -name "$1" -print
+          }
+
+          # `|| true`: grep exits 1 on no match, and under `pipefail` that would
+          # abort here with no diagnostic instead of reaching the check below.
+          sigs="$(find_sigs "*${SUFFIX}.sig" | grep -F "/${TARGET}/" | sort || true)"
+          count="$(printf '%s' "$sigs" | grep -c . || true)"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly one *${SUFFIX}.sig under a ${TARGET} bundle dir, found $count"
+            echo "All signatures produced by this build:"
+            find_sigs '*.sig' || true
+            exit 1
+          fi
+
+          sig_path="$sigs"
+          artifact="$(basename "${sig_path%.sig}")"
+          # printf, not <<<: a here-string appends a newline that @uri would
+          # faithfully encode into the URL as %0A.
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(printf '%s' "$artifact" | jq -sRr @uri)"
+
+          mkdir -p fragments
+          jq -n \
+            --arg k "$PLATFORM" \
+            --arg sig "$(cat "$sig_path")" \
+            --arg url "$url" \
+            '{($k): {signature: $sig, url: $url}}' \
+            > "fragments/${PLATFORM}.json"
+
+          echo "$PLATFORM -> $artifact"
+          cat "fragments/${PLATFORM}.json"
+
+      - name: Upload updater manifest fragment
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-fragment-${{ matrix.updater_platform }}
+          path: fragments/${{ matrix.updater_platform }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Compose latest.json and publish
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    timeout-minutes: 15
+    steps:
+      - name: Download updater manifest fragments
+        uses: actions/download-artifact@v4
+        with:
+          pattern: updater-fragment-*
+          path: fragments
+          merge-multiple: true
+
+      - name: Compose latest.json
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # darwin-x86_64 is absent on purpose: Intel Mac is not in the build
+          # matrix, so those users keep the manual download link.
+          EXPECTED=(windows-x86_64 windows-i686 linux-x86_64 linux-aarch64 darwin-aarch64)
+
+          missing=0
+          for key in "${EXPECTED[@]}"; do
+            if [ ! -f "fragments/${key}.json" ]; then
+              echo "::error::no updater fragment for $key"
+              missing=1
+            fi
+          done
+          # A latest.json missing a platform strands those users on the old
+          # version with no error surfaced anywhere. Fail the release instead.
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::refusing to publish an incomplete latest.json"
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "See https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson platforms "$(jq -s 'add' fragments/*.json)" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+
+          cat latest.json
+
+      - name: Upload latest.json and publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" latest.json --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"

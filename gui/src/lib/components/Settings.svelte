@@ -8,6 +8,14 @@
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import UpdateProgress from '$lib/components/UpdateProgress.svelte';
+  import {
+    selfUpdate,
+    installPhase,
+    installBusy,
+    probeSelfUpdate,
+    installSelfUpdate
+  } from '$lib/stores/selfUpdate';
 
   let { onClose } = $props<{ onClose: () => void }>();
 
@@ -89,6 +97,12 @@
     updateInfo = null;
     try {
       updateInfo = await api.update.check();
+      // The daemon's answer only says an update exists. Ask the plugin the
+      // separate question of whether we can install it here, or this panel
+      // would offer nothing but a link to go do it by hand.
+      if (updateInfo?.available) {
+        await probeSelfUpdate();
+      }
     } catch (e) {
       updateError = String(e);
     } finally {
@@ -248,12 +262,20 @@
             {#if updateInfo.available}
               <div class="update-available">
                 <p class="update-label">Update available: <strong>{updateInfo.latest_version}</strong></p>
-                {#if updateInfo.release_url}
+                {#if $selfUpdate && $installPhase !== 'error'}
+                  <button class="btn btn-primary" onclick={installSelfUpdate} disabled={$installBusy}>
+                    {$installBusy ? 'Working…' : 'Install Update'}
+                  </button>
+                {:else if updateInfo.release_url}
                   <a href={updateInfo.release_url} target="_blank" class="btn btn-primary">
                     View Release
                   </a>
                 {/if}
               </div>
+              {#if $selfUpdate && $installPhase !== 'error'}
+                <p class="update-hint">Installing stops every running task and restarts Labalaba.</p>
+              {/if}
+              <UpdateProgress />
             {:else}
               <p class="update-current">You're on the latest version ({updateInfo.current_version})</p>
             {/if}
@@ -407,6 +429,7 @@
   }
 
   .update-label { font-size: 0.875rem; color: var(--accent); }
+  .update-hint { font-size: 0.8125rem; color: var(--text-muted); margin: 0; }
   .update-current { font-size: 0.8125rem; color: var(--text-muted); }
   .update-error { font-size: 0.8125rem; color: var(--status-crashed); }
 
